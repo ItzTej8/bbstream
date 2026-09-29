@@ -1,0 +1,15 @@
+{
+  "name": "bigg-boss-vps-canvas-live-season20",
+  "version": "11.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.mjs",
+    "check": "bun run src/self-check.mjs"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "0.1.100",
+    "@stu43005/masterchat": "2.1.0",
+    "firebase-admin": "^14.5.0"
+  }
+}
