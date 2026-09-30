@@ -1,8 +1,11 @@
+import { Worker, isMainThread } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
 import { config } from "./config.mjs";
 
-const phrasePcmCache = new Map();
 let lastSpeechAt = 0;
 let isEnabled = config.ttsEnabled;
+let currentVoice = process.env.TTS_VOICE || "en-IN-PrabhatNeural";
+
 let targetContestants = new Set(
   (config.ttsSpecificContestants || [])
     .map(s => String(s).toLowerCase().replace(/[^a-z0-9]/g, ""))
@@ -10,6 +13,9 @@ let targetContestants = new Set(
 );
 
 let playAudioCallback = null;
+let ttsWorker = null;
+let nextRequestId = 1;
+const pendingRequests = new Map();
 
 export function registerTtsAudioPlayer(callback) {
   playAudioCallback = callback;
@@ -17,7 +23,7 @@ export function registerTtsAudioPlayer(callback) {
 
 export function setTtsEnabled(enabled) {
   isEnabled = Boolean(enabled);
-  console.log(`[tts] TTS speech announcer is now ${isEnabled ? "ENABLED" : "DISABLED"}`);
+  console.log(`[tts] 🗣️ Announcer voice is now ${isEnabled ? "ENABLED (ON)" : "DISABLED (OFF)"}`);
   return isEnabled;
 }
 
@@ -25,16 +31,29 @@ export function isTtsEnabled() {
   return isEnabled;
 }
 
+export function setTtsVoice(voice) {
+  if (voice && typeof voice === "string") {
+    currentVoice = voice.trim();
+    console.log(`[tts] 🎙️ Announcer voice set to: "${currentVoice}"`);
+    return currentVoice;
+  }
+  return currentVoice;
+}
+
+export function getTtsVoice() {
+  return currentVoice;
+}
+
 export function setTtsTargetContestant(target) {
   if (!target || target === "all" || target === "clear" || target === "reset") {
     targetContestants.clear();
-    console.log("[tts] TTS announcing for ALL contestants");
+    console.log("[tts] Announcer active for ALL contestants");
     return { ok: true, filter: "ALL" };
   }
   const cleanKey = String(target).toLowerCase().replace(/[^a-z0-9]/g, "");
   targetContestants.clear();
   targetContestants.add(cleanKey);
-  console.log(`[tts] TTS locked to specific contestant: "${target}"`);
+  console.log(`[tts] Announcer locked to contestant: "${target}"`);
   return { ok: true, filter: target };
 }
 
@@ -45,7 +64,7 @@ export function getTtsFilterStatus() {
 
 function cleanSpokenName(name) {
   if (!name) return "A viewer";
-  // Remove emojis and non-alphanumeric noise so TTS pronounces clearly
+  // Remove emojis, symbols, and URL noise so neural TTS speaks fluently
   const noEmoji = String(name)
     .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}]/gu, " ")
     .replace(/[_@#~`^+=|\\/<>]/g, " ")
@@ -55,56 +74,61 @@ function cleanSpokenName(name) {
   return safe || "A viewer";
 }
 
-async function synthesizePcm(text) {
-  const cached = phrasePcmCache.get(text);
-  if (cached) return cached;
+function ensureWorker() {
+  if (!isMainThread) return null;
+  if (ttsWorker) return ttsWorker;
 
-  const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encodeURIComponent(text)}`;
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Referer": "https://translate.google.com/"
-    }
-  });
+  try {
+    const workerPath = fileURLToPath(new URL("./tts-worker.mjs", import.meta.url));
+    const worker = new Worker(workerPath);
 
-  if (!res.ok) {
-    throw new Error(`Google TTS request failed with HTTP ${res.status}`);
+    worker.on("message", (msg) => {
+      if (msg.type === "tts_pcm") {
+        const req = pendingRequests.get(msg.id);
+        if (req) {
+          pendingRequests.delete(msg.id);
+          const pcm = new Int16Array(msg.pcm);
+          if (pcm.length > 0 && typeof playAudioCallback === "function") {
+            playAudioCallback(pcm, config.ttsVolume || 1.0);
+            console.log(`[tts] 🗣️ Announced voice: "${req.phrase}" (${currentVoice})`);
+          }
+        }
+      } else if (msg.type === "tts_error") {
+        const req = pendingRequests.get(msg.id);
+        if (req) {
+          pendingRequests.delete(msg.id);
+          console.warn(`[tts] Speech synthesis error for "${req.phrase}": ${msg.error}`);
+        }
+      }
+    });
+
+    worker.on("error", (err) => {
+      console.error("[tts] Background worker error:", err.message);
+      ttsWorker = null;
+    });
+
+    worker.on("exit", (code) => {
+      if (code !== 0) console.warn(`[tts] Background worker exited with code ${code}`);
+      ttsWorker = null;
+    });
+
+    ttsWorker = worker;
+    return ttsWorker;
+  } catch (err) {
+    console.error("[tts] Failed to initialize TTS worker:", err.message);
+    return null;
   }
-
-  const mp3Buf = Buffer.from(await res.arrayBuffer());
-  const proc = Bun.spawn(
-    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "s16le", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", "pipe:1"],
-    {
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "ignore"
-    }
-  );
-
-  proc.stdin.write(mp3Buf);
-  proc.stdin.end();
-
-  const pcmBuf = Buffer.from(await new Response(proc.stdout).arrayBuffer());
-  await proc.exited;
-
-  const int16 = new Int16Array(pcmBuf.buffer, pcmBuf.byteOffset, pcmBuf.byteLength / 2);
-  if (int16.length > 0) {
-    if (phrasePcmCache.size > 150) phrasePcmCache.clear();
-    phrasePcmCache.set(text, int16);
-  }
-  return int16;
 }
 
-export async function queueVoteSpeech({ voter, contestantNo, candidateName, count = 1 }) {
+export function queueVoteSpeech({ voter, contestantNo, candidateName, count = 1 }) {
   if (!isEnabled) return false;
 
   const now = Date.now();
   if (now - lastSpeechAt < config.ttsMinIntervalMs) {
-    // Too soon since last voice announcement — skip to avoid stream audio clutter
-    return false;
+    return false; // Rate-limited to maintain pleasant stream audio pacing
   }
 
-  // Check if specific contestant filter is configured
+  // Check contestant filter
   if (targetContestants.size > 0) {
     const noStr = String(contestantNo);
     const cleanCand = String(candidateName || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -130,15 +154,19 @@ export async function queueVoteSpeech({ voter, contestantNo, candidateName, coun
 
   lastSpeechAt = now;
 
-  try {
-    const pcm = await synthesizePcm(phrase);
-    if (pcm && pcm.length > 0 && typeof playAudioCallback === "function") {
-      playAudioCallback(pcm, config.ttsVolume || 1.0);
-      console.log(`[tts] 🗣️ Announced voice: "${phrase}"`);
-      return true;
-    }
-  } catch (err) {
-    console.warn(`[tts] Speech synthesis failed: ${err.message}`);
-  }
-  return false;
+  const worker = ensureWorker();
+  if (!worker) return false;
+
+  const id = nextRequestId++;
+  pendingRequests.set(id, { phrase, at: now });
+
+  // Post to background worker thread (zero main thread CPU impact!)
+  worker.postMessage({
+    cmd: "synthesize",
+    id,
+    text: phrase,
+    voice: currentVoice
+  });
+
+  return true;
 }

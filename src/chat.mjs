@@ -9,7 +9,7 @@ import {
   setContestantBuff, startQuiz, answerQuiz
 } from "./interactive.mjs";
 import { setBgMusicVolume, getBgMusicVolume, setMusicTrack, nextMusicTrack, prevMusicTrack, setTrackLoopMode, getTrackLoopMode, getMusicTrackInfo, MUSIC_TRACKS } from "./frame-server.mjs";
-import { setTtsEnabled, isTtsEnabled, setTtsTargetContestant, getTtsFilterStatus } from "./tts.mjs";
+import { setTtsEnabled, isTtsEnabled, setTtsVoice, getTtsVoice, setTtsTargetContestant, getTtsFilterStatus } from "./tts.mjs";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -61,7 +61,7 @@ export const KNOWN_COMMANDS = new Set([
   "galaxy", "nebula", "milkyway", "tsunami", "ocean", "wave", "diamond", "gem", "prism",
   "confess", "gossip", "immunity", "danger", "supervote", "quiz", "trivia", "ans", "answer",
   "buzzer", "goldenbuzzer", "siren", "clash", "duel", "fortune", "lucky", "oracle", "spotlight", "beam", "streak", "combo",
-  "random", "mvp", "event", "close", "open", "status", "predict", "winner", "addvotes", "addvote", "tts", "voice"
+  "random", "mvp", "event", "close", "open", "status", "predict", "winner", "addvotes", "addvote", "tts", "voice", "announce", "announcer"
 ]);
 
 // Flexible vote & contestant alias map
@@ -1182,30 +1182,47 @@ export function startChatLoop({ signal }) {
                   setAnnouncement(`🔮 PREDICTION: Type !predict <contestant> to lock in your Bigg Boss Winner pick!`, "PREDICTION HELP", 3500);
                 }
               }
-              // --- Spoken TTS Audio Announcer Controls ---
-              else if (cmdToken === "tts" || cmdToken === "voice") {
+              // --- Spoken Neural TTS Audio Announcer Controls: !announce on/off, !tts on/off ---
+              else if (cmdToken === "tts" || cmdToken === "voice" || cmdToken === "announce" || cmdToken === "announcer") {
                 const isOwnerOrAdmin = admin(id, owner, mod);
                 const ttsArg = (parts[1] || "").toLowerCase();
                 const ttsRest = parts.slice(2).join(" ").trim();
 
-                if (ttsArg === "on" || ttsArg === "enable" || ttsArg === "start") {
+                if (ttsArg === "on" || ttsArg === "enable" || ttsArg === "start" || ttsArg === "play") {
                   if (isOwnerOrAdmin) {
                     setTtsEnabled(true);
-                    setAnnouncement(`🗣️ Voice announcements ENABLED by ${author}!`, "TTS VOICE", 3500);
+                    setAnnouncement(`🗣️ Live Voice Announcer TURNED ON by ${author}!`, "VOICE ANNOUNCER", 3500);
+                    console.log(`[tts] ${author} enabled live voice announcements`);
                   }
                 } else if (ttsArg === "off" || ttsArg === "disable" || ttsArg === "mute" || ttsArg === "stop") {
                   if (isOwnerOrAdmin) {
                     setTtsEnabled(false);
-                    setAnnouncement(`🔇 Voice announcements DISABLED by ${author}!`, "TTS VOICE", 3500);
+                    setAnnouncement(`🔇 Live Voice Announcer TURNED OFF by ${author}!`, "VOICE ANNOUNCER", 3500);
+                    console.log(`[tts] ${author} disabled live voice announcements`);
                   }
-                } else if (ttsArg === "status") {
-                  const st = isTtsEnabled() ? "ENABLED" : "DISABLED";
+                } else if (ttsArg === "voice" || ttsArg === "speaker") {
+                  if (isOwnerOrAdmin && ttsRest) {
+                    let vName = ttsRest;
+                    const vLower = ttsRest.toLowerCase();
+                    if (vLower.includes("prabhat")) vName = "en-IN-PrabhatNeural";
+                    else if (vLower.includes("neerja")) vName = "en-IN-NeerjaExpressiveNeural";
+                    else if (vLower.includes("chris") || vLower.includes("christopher")) vName = "en-US-ChristopherNeural";
+                    else if (vLower.includes("guy")) vName = "en-US-GuyNeural";
+                    setTtsVoice(vName);
+                    setAnnouncement(`🎙️ Announcer voice set to: ${vName}`, "VOICE CHANGED", 3500);
+                  } else {
+                    const cur = getTtsVoice();
+                    setAnnouncement(`🎙️ Announcer voice: ${cur} • Available: prabhat, neerja, chris, guy`, "ANNOUNCER VOICE", 4500);
+                  }
+                } else if (ttsArg === "status" || (!ttsArg && (cmdToken === "announce" || cmdToken === "announcer"))) {
+                  const st = isTtsEnabled() ? "ENABLED (ON)" : "DISABLED (OFF)";
                   const filt = getTtsFilterStatus();
-                  setAnnouncement(`🗣️ TTS: ${st} • Filter: ${filt}`, "TTS STATUS", 4000);
+                  const curV = getTtsVoice();
+                  setAnnouncement(`🗣️ Announcer: ${st} • Voice: ${curV} • Filter: ${filt} • Use !announce on / !announce off`, "ANNOUNCER STATUS", 4000);
                 } else if (ttsArg === "all" || ttsArg === "reset" || ttsArg === "clear") {
                   if (isOwnerOrAdmin) {
                     setTtsTargetContestant("all");
-                    setAnnouncement(`🗣️ TTS voice will now announce votes for ALL CONTESTANTS!`, "TTS FILTER", 4000);
+                    setAnnouncement(`🗣️ Voice will now announce votes for ALL CONTESTANTS!`, "TTS FILTER", 4000);
                   }
                 } else {
                   const targetQ = (ttsArg === "only" || ttsArg === "contestant") ? ttsRest : parts.slice(1).join(" ");
@@ -1214,11 +1231,12 @@ export function startChatLoop({ signal }) {
                     const cItem = config.contestants.find(x => x.no === cTarget);
                     const cName = cItem?.displayName || cItem?.name || `#${cTarget}`;
                     setTtsTargetContestant(String(cTarget));
-                    setAnnouncement(`🗣️ TTS voice will announce votes ONLY for #${cTarget} ${cName}!`, "TTS FILTER", 4500);
+                    setAnnouncement(`🗣️ Voice will announce votes ONLY for #${cTarget} ${cName}!`, "TTS FILTER", 4500);
                   } else {
                     const st = isTtsEnabled() ? "ON" : "OFF";
                     const filt = getTtsFilterStatus();
-                    setAnnouncement(`🗣️ TTS (${st}, Filter: ${filt}): Use !tts on/off • !tts all • !tts <contestant>`, "TTS INFO", 4000);
+                    const curV = getTtsVoice();
+                    setAnnouncement(`🗣️ Announcer (${st}, ${curV}): Use !announce on/off • !announce voice <name> • !tts <contestant>`, "ANNOUNCER INFO", 4000);
                   }
                 }
               }

@@ -11,12 +11,15 @@ const width=output.width,height=output.height;
 const renderWidth=Math.min(width,render.width),renderHeight=Math.min(height,render.height);
 let codec=String(process.env.VIDEO_CODEC||"libx264").trim();
 if(process.platform!=="win32"&&codec==="h264_mf") codec="libx264";
-const detectedCpus = Math.max(1, os.cpus()?.length || 4);
-const defaultWorkers = Math.min(8, Math.max(2, detectedCpus));
+const detectedCpus = Math.max(1, os.cpus()?.length || 2);
+const autoWorkers = detectedCpus <= 2 ? Math.min(2, detectedCpus) : Math.max(2, Math.min(4, detectedCpus - 1));
 const defaultFps = int("FPS", 30, 10);
 const defaultRenderFps = process.env.RENDER_FPS ? int("RENDER_FPS", defaultFps, 10) : defaultFps;
 const envWorkers = String(process.env.RENDER_WORKERS || "").trim().toLowerCase();
-const configuredWorkers = (envWorkers && envWorkers !== "auto") ? int("RENDER_WORKERS", defaultWorkers, 1) : defaultWorkers;
+const configuredWorkers = (envWorkers && envWorkers !== "auto") ? int("RENDER_WORKERS", autoWorkers, 1) : autoWorkers;
+const finalWorkers = (process.platform !== "win32" && detectedCpus <= 4 && configuredWorkers >= detectedCpus)
+  ? Math.max(1, detectedCpus - 1)
+  : configuredWorkers;
 export const config=Object.freeze({
   rtmpUrl:String(process.env.YOUTUBE_RTMP_URL||"rtmp://a.rtmp.youtube.com/live2").replace(/\/+$/,""),
   streamKey:String(process.env.YOUTUBE_STREAM_KEY||"").trim(),videoId:String(process.env.YOUTUBE_VIDEO_ID||"").trim(),
@@ -31,7 +34,7 @@ export const config=Object.freeze({
   fps:defaultFps,renderFps:defaultRenderFps,jpegQuality:Math.min(95,int("JPEG_QUALITY",40,20)),bitrate:String(process.env.BITRATE||"2500k"),
   videoCodec:codec,preset:String(process.env.PRESET||"ultrafast"),encoderThreads:int("ENCODER_THREADS",0,0),gopSeconds:int("GOP_SECONDS",2),
   videoFeedFormat:String(process.env.VIDEO_FEED_FORMAT||"raw").toLowerCase().trim(),
-  renderWorkers:configuredWorkers,
+  renderWorkers:finalWorkers,
   voteCommand:String(process.env.VOTE_COMMAND||"!vote").trim()||"!vote",votePolicy:"every_vote",contestants:contestantCatalog,
   adminChannelIds:csv("ADMIN_CHANNEL_IDS"),healthPort:int("HEALTH_PORT",8787),frameServerPort:int("FRAME_SERVER_PORT",8788),
   stateFile:String(process.env.STATE_FILE||"data/state.json"),dbFile:String(process.env.DB_FILE||"data/votes.sqlite"),backgroundImage:String(process.env.BACKGROUND_IMAGE||"").trim(),

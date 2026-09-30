@@ -91,23 +91,23 @@ export function createEncoder() {
       "-g", String(config.fps * config.gopSeconds),
       "-pix_fmt", "yuv420p",
     );
-  } else {
     const detectedCpus = os.cpus()?.length || 2;
-    // On low-end Linux VPS, default to at most half the CPU cores (min 1, max 4) so Bun render workers aren't starved
+    // On low-end Linux VPS, allow x264 to utilize multi-threaded slice encoding with fast lookahead
     const x264Threads = config.encoderThreads > 0
       ? config.encoderThreads
-      : Math.max(1, Math.min(4, Math.floor(detectedCpus / 2) || 1));
+      : Math.max(2, Math.min(8, detectedCpus));
+    const slices = Math.max(1, Math.min(4, Math.floor(x264Threads / 2) || 1));
     args.push(
       "-c:v", "libx264",
       "-preset", config.preset || "ultrafast",
-      "-tune", "zerolatency",
       "-threads", String(x264Threads),
+      "-slices", String(slices),
       "-pix_fmt", "yuv420p",
       "-b:v", `${br}k`,
       "-minrate", `${br}k`,
       "-maxrate", `${br}k`,
       "-bufsize", `${br * 2}k`,
-      "-x264-params", "nal-hrd=cbr:force-cfr=1",
+      "-x264-params", "nal-hrd=cbr:force-cfr=1:sync-lookahead=2:rc-lookahead=10",
       "-profile:v", "main",
       "-g", String(config.fps * config.gopSeconds),
       "-keyint_min", String(config.fps * config.gopSeconds),
