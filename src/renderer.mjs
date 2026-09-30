@@ -1238,20 +1238,6 @@ function drawHero(c, p, now, subtitle = "LIVE VOTING", tr = null) {
   // Eye in center (perfectly proportioned, prominent & sharp)
   drawEye(c, p, 540, 138, 0.58, now);
 
-  // Stacked side text on the top right with traveling sequential wave
-  const sideY = 98;
-  const words = ["WATCH", "VOTE", "SUPPORT", "YOUR", "FAVOURITE!"];
-  const activeIdx = Math.floor((now * 0.0028) % words.length);
-  words.forEach((w, i) => {
-    const isLit = (i === activeIdx);
-    if (isLit) {
-      textC(c, w, 895, sideY + i * 20, 16.5, p.goldBright, 900, "center");
-    } else {
-      const sideColor = p.theme === "light" ? p.titleText : p.muted;
-      textC(c, w, 895, sideY + i * 20, 16.5, sideColor, 700, "center");
-    }
-  });
-
   // 3D Metallic "BIGG BOSS" Title (Y = 224, size = 44)
   const titleY = 224;
   c.save();
@@ -1306,9 +1292,9 @@ function drawHero(c, p, now, subtitle = "LIVE VOTING", tr = null) {
 
   textC(c, subtitle, 540, pillY + 22, 17, p.goldBright, 800, "center");
 
-  // Subtitle: "YOUR VOTE COUNTS! • VOTE NOW!"
+  // Subtitle: "WATCH • VOTE • SUPPORT YOUR FAVORITE!"
   const subColor = p.theme === "light" ? p.titleText : p.muted;
-  textC(c, "YOUR VOTE COUNTS! • VOTE NOW!", 540, 296, 15, subColor, 750, "center");
+  textC(c, "WATCH • VOTE • SUPPORT YOUR FAVORITE!", 540, 296, 15, subColor, 750, "center");
 
   // Screen Navigation Tabs Bar
   drawNavTabs(c, p, now, interactiveState().screen, tr);
