@@ -261,8 +261,8 @@ function getEmojiFontStr(sz) {
 function drawEmoji(c, emoji, cpx, cpy, sizePx) {
   const f = getEmojiFontStr(Math.max(8, Math.round(sizePx)));
   if (c._curFont !== f) { c.font = f; c._curFont = f; }
-  if (c._curAlign !== "center") { c.textAlign = "center"; c._curAlign = "center"; }
-  if (c._curBase !== "middle") { c.textBaseline = "middle"; c._curBase = "middle"; }
+  c.textAlign = "center";
+  c.textBaseline = "middle";
   c.fillStyle = "#ffffff";
   c.fillText(String(emoji ?? ""), cpx, cpy);
 }
@@ -273,8 +273,8 @@ function textC(c, v, x, y, size, color, weight = 700, align = "left") {
   const f = getFontStr(w, sz);
   if (c._curFont !== f) { c.font = f; c._curFont = f; }
   c.fillStyle = color;
-  if (c._curAlign !== align) { c.textAlign = align; c._curAlign = align; }
-  if (c._curBase !== "alphabetic") { c.textBaseline = "alphabetic"; c._curBase = "alphabetic"; }
+  c.textAlign = align;
+  c.textBaseline = "alphabetic";
   c.fillText(String(v ?? ""), px(x), py(y));
 }
 
@@ -659,18 +659,18 @@ function drawTopBar(c, p, now) {
   textC(c, `${likesFormatted} Likes`, pillX + 34, pill4Y + 23, 15.5, "#ec4899", 800);
 
   // --- 1. ANIMATED SUBSCRIBE BUTTON ARROW CARD (Points directly to YouTube's native Subscribe button) ---
-  const subCardX = 720, subCardY = 112, subCardW = 320, subCardH = 76, subCardR = 15;
-  const subBounce = Math.sin(now * 0.008) * 5;
-  const arrowX = 815; // Aligns directly with center of YouTube's native Subscribe button
-  const arrowTipY = subCardY - 18 + subBounce;
+  const subCardX = 720, subCardY = 142, subCardW = 320, subCardH = 64, subCardR = 14;
+  const subBounce = Math.sin(now * 0.008) * 4;
+  const arrowX = 785; // Aligns directly with center of YouTube's native Subscribe button
+  const arrowTipY = 82 + subBounce;
 
   c.save();
   // Upward radiating sonar wave beams targeting YouTube's Subscribe button
   for (let w = 0; w < 3; w++) {
     const wavePhase = ((now * 0.0024 + w * 0.33) % 1);
-    const waveY = arrowTipY - 4 - wavePhase * 20;
+    const waveY = arrowTipY - 4 - wavePhase * 18;
     const waveAlpha = (1 - wavePhase) * 0.9;
-    const waveW = 18 + wavePhase * 28;
+    const waveW = 16 + wavePhase * 24;
     c.strokeStyle = `rgba(239, 68, 68, ${waveAlpha})`;
     c.lineWidth = ps(2.2);
     c.beginPath();
@@ -681,14 +681,14 @@ function drawTopBar(c, p, now) {
   // Dark shield backdrop behind arrow for extreme contrast
   c.fillStyle = "rgba(10, 16, 32, 0.92)";
   c.beginPath();
-  c.arc(px(arrowX), py(arrowTipY + 16), ps(22), 0, Math.PI * 2);
+  c.arc(px(arrowX), py(arrowTipY + 13), ps(18), 0, Math.PI * 2);
   c.fill();
   c.strokeStyle = "rgba(251, 191, 36, 0.6)";
   c.lineWidth = ps(1.5);
   c.stroke();
 
-  // Upward Pointing 3D Neon Arrow Head + Stem
-  const arrowW = 18, arrowHeadH = 20, stemW = 9, stemH = 12;
+  // Upward Pointing 3D Neon Arrow Head + Stem (crisp, elegant proportions)
+  const arrowW = 16, arrowHeadH = 16, stemW = 8, stemH = 10;
   c.beginPath();
   c.moveTo(px(arrowX), py(arrowTipY)); // Top point
   c.lineTo(px(arrowX - arrowW), py(arrowTipY + arrowHeadH)); // Left wing
@@ -702,7 +702,7 @@ function drawTopBar(c, p, now) {
   // Outer radiant red/gold aura
   const arrowPulse = 0.5 + 0.5 * Math.sin(now * 0.01);
   c.strokeStyle = `rgba(255, 0, 0, ${0.5 + 0.45 * arrowPulse})`;
-  c.lineWidth = ps(6 + arrowPulse * 3);
+  c.lineWidth = ps(5 + arrowPulse * 2.5);
   c.stroke();
 
   // Arrow gradient fill (White tip to YouTube Red to Gold Glow)
@@ -715,11 +715,11 @@ function drawTopBar(c, p, now) {
   c.fill();
 
   c.strokeStyle = "#ffffff";
-  c.lineWidth = ps(2);
+  c.lineWidth = ps(1.8);
   c.stroke();
-  drawMagicSparkle(c, arrowX, arrowTipY - 2, 7, now, "#ffffff");
+  drawMagicSparkle(c, arrowX, arrowTipY - 2, 6.5, now, "#ffffff");
 
-  // Premium Dark Glass Card Base (covers background cleanly with zero text overlap)
+  // Premium Dark Glass Card Base (positioned with generous breathing distance below the arrow)
   c.fillStyle = "rgba(10, 16, 32, 0.96)";
   rr(c, subCardX, subCardY, subCardW, subCardH, subCardR);
   c.fill();
@@ -745,21 +745,21 @@ function drawTopBar(c, p, now) {
   // Swinging Bell Icon + Text
   const bellSwing = Math.sin(now * 0.012) * 0.18;
   c.save();
-  c.translate(px(subCardX + 24), py(subCardY + 28));
+  c.translate(px(subCardX + 22), py(subCardY + 24));
   c.rotate(bellSwing);
-  drawEmoji(c, "🔔", 0, 0, ps(18));
+  drawEmoji(c, "🔔", 0, 0, ps(17));
   c.restore();
 
-  textC(c, "TAP TO SUBSCRIBE", subCardX + 46, subCardY + 30, 15, "#ffffff", 950);
-  drawEmoji(c, "👆", px(subCardX + subCardW - 24), py(subCardY + 28), ps(17));
-  textC(c, "Support your favorite contestant!", subCardX + 46, subCardY + 56, 12, "#fbbf24", 800);
-  drawMagicSparkle(c, subCardX + subCardW - 14, subCardY + 56, 6.5, now, "#fbbf24");
+  textC(c, "TAP TO SUBSCRIBE", subCardX + 44, subCardY + 27, 14.5, "#ffffff", 950);
+  drawEmoji(c, "👆", px(subCardX + subCardW - 22), py(subCardY + 24), ps(16));
+  textC(c, "Support your favorite contestant!", subCardX + 44, subCardY + 49, 11.5, "#fbbf24", 800);
+  drawMagicSparkle(c, subCardX + subCardW - 14, subCardY + 49, 6, now, "#fbbf24");
   c.restore();
 
-  // --- 2. UPGRADED HIGH-IMPACT "DOUBLE TAP FOR MAGIC ✨" BUTTON (Top Right Y = 196) ---
+  // --- 2. UPGRADED HIGH-IMPACT "DOUBLE TAP FOR MAGIC ✨" BUTTON (Top Right Y = 218) ---
   const isDtHighlighted = Boolean(state.highlightDoubleTapUntil && now < state.highlightDoubleTapUntil);
   const dtW = 320, dtH = 38, dtR = dtH / 2;
-  const dtX = 720, dtY = 196;
+  const dtX = 720, dtY = 218;
   const dtPulse = 0.5 + 0.5 * Math.sin(now * (isDtHighlighted ? 0.024 : 0.009));
 
   c.save();
