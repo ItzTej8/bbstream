@@ -658,12 +658,109 @@ function drawTopBar(c, p, now) {
   c.restore();
   textC(c, `${likesFormatted} Likes`, pillX + 34, pill4Y + 23, 15.5, "#ec4899", 800);
 
-  // Dedicated Interactive Callout: "DOUBLE TAP TO SEE THE MAGIC ✨" (Top Right Y = 202)
+  // --- 1. ANIMATED SUBSCRIBE BUTTON ARROW CARD (Points directly to YouTube's native Subscribe button) ---
+  const subCardX = 720, subCardY = 112, subCardW = 320, subCardH = 76, subCardR = 15;
+  const subBounce = Math.sin(now * 0.008) * 5;
+  const arrowX = 815; // Aligns directly with center of YouTube's native Subscribe button
+  const arrowTipY = subCardY - 18 + subBounce;
+
+  c.save();
+  // Upward radiating sonar wave beams targeting YouTube's Subscribe button
+  for (let w = 0; w < 3; w++) {
+    const wavePhase = ((now * 0.0024 + w * 0.33) % 1);
+    const waveY = arrowTipY - 4 - wavePhase * 20;
+    const waveAlpha = (1 - wavePhase) * 0.9;
+    const waveW = 18 + wavePhase * 28;
+    c.strokeStyle = `rgba(239, 68, 68, ${waveAlpha})`;
+    c.lineWidth = ps(2.2);
+    c.beginPath();
+    c.arc(px(arrowX), py(waveY), ps(waveW / 2), Math.PI * 1.15, Math.PI * 1.85);
+    c.stroke();
+  }
+
+  // Dark shield backdrop behind arrow for extreme contrast
+  c.fillStyle = "rgba(10, 16, 32, 0.92)";
+  c.beginPath();
+  c.arc(px(arrowX), py(arrowTipY + 16), ps(22), 0, Math.PI * 2);
+  c.fill();
+  c.strokeStyle = "rgba(251, 191, 36, 0.6)";
+  c.lineWidth = ps(1.5);
+  c.stroke();
+
+  // Upward Pointing 3D Neon Arrow Head + Stem
+  const arrowW = 18, arrowHeadH = 20, stemW = 9, stemH = 12;
+  c.beginPath();
+  c.moveTo(px(arrowX), py(arrowTipY)); // Top point
+  c.lineTo(px(arrowX - arrowW), py(arrowTipY + arrowHeadH)); // Left wing
+  c.lineTo(px(arrowX - stemW / 2), py(arrowTipY + arrowHeadH - 2)); // Left inner notch
+  c.lineTo(px(arrowX - stemW / 2), py(arrowTipY + arrowHeadH + stemH)); // Left stem base
+  c.lineTo(px(arrowX + stemW / 2), py(arrowTipY + arrowHeadH + stemH)); // Right stem base
+  c.lineTo(px(arrowX + stemW / 2), py(arrowTipY + arrowHeadH - 2)); // Right inner notch
+  c.lineTo(px(arrowX + arrowW), py(arrowTipY + arrowHeadH)); // Right wing
+  c.closePath();
+
+  // Outer radiant red/gold aura
+  const arrowPulse = 0.5 + 0.5 * Math.sin(now * 0.01);
+  c.strokeStyle = `rgba(255, 0, 0, ${0.5 + 0.45 * arrowPulse})`;
+  c.lineWidth = ps(6 + arrowPulse * 3);
+  c.stroke();
+
+  // Arrow gradient fill (White tip to YouTube Red to Gold Glow)
+  const arrowGrad = c.createLinearGradient(px(arrowX), py(arrowTipY), px(arrowX), py(arrowTipY + arrowHeadH + stemH));
+  arrowGrad.addColorStop(0, "#ffffff");
+  arrowGrad.addColorStop(0.25, "#ff0000");
+  arrowGrad.addColorStop(0.75, "#f59e0b");
+  arrowGrad.addColorStop(1, "#fbbf24");
+  c.fillStyle = arrowGrad;
+  c.fill();
+
+  c.strokeStyle = "#ffffff";
+  c.lineWidth = ps(2);
+  c.stroke();
+  drawMagicSparkle(c, arrowX, arrowTipY - 2, 7, now, "#ffffff");
+
+  // Premium Dark Glass Card Base (covers background cleanly with zero text overlap)
+  c.fillStyle = "rgba(10, 16, 32, 0.96)";
+  rr(c, subCardX, subCardY, subCardW, subCardH, subCardR);
+  c.fill();
+
+  const subCardBg = c.createLinearGradient(px(subCardX), 0, px(subCardX + subCardW), 0);
+  subCardBg.addColorStop(0, "rgba(239, 68, 68, 0.32)");
+  subCardBg.addColorStop(0.5, "rgba(245, 158, 11, 0.25)");
+  subCardBg.addColorStop(1, "rgba(239, 68, 68, 0.28)");
+  c.fillStyle = subCardBg;
+  rr(c, subCardX, subCardY, subCardW, subCardH, subCardR);
+  c.fill();
+
+  // Animated gradient border
+  const subBorder = c.createLinearGradient(px(subCardX), 0, px(subCardX + subCardW), 0);
+  subBorder.addColorStop(0, "#ff0000");
+  subBorder.addColorStop(0.5, "#fbbf24");
+  subBorder.addColorStop(1, "#ff0000");
+  c.strokeStyle = subBorder;
+  c.lineWidth = ps(1.8);
+  rr(c, subCardX, subCardY, subCardW, subCardH, subCardR);
+  c.stroke();
+
+  // Swinging Bell Icon + Text
+  const bellSwing = Math.sin(now * 0.012) * 0.18;
+  c.save();
+  c.translate(px(subCardX + 24), py(subCardY + 28));
+  c.rotate(bellSwing);
+  drawEmoji(c, "🔔", 0, 0, ps(18));
+  c.restore();
+
+  textC(c, "TAP TO SUBSCRIBE", subCardX + 46, subCardY + 30, 15, "#ffffff", 950);
+  drawEmoji(c, "👆", px(subCardX + subCardW - 24), py(subCardY + 28), ps(17));
+  textC(c, "Support your favorite contestant!", subCardX + 46, subCardY + 56, 12, "#fbbf24", 800);
+  drawMagicSparkle(c, subCardX + subCardW - 14, subCardY + 56, 6.5, now, "#fbbf24");
+  c.restore();
+
+  // --- 2. UPGRADED HIGH-IMPACT "DOUBLE TAP FOR MAGIC ✨" BUTTON (Top Right Y = 196) ---
   const isDtHighlighted = Boolean(state.highlightDoubleTapUntil && now < state.highlightDoubleTapUntil);
-  const dtW = isDtHighlighted ? 318 : 305, dtH = 34, dtR = dtH / 2;
-  const dtX = 1040 - dtW, dtY = 202;
-  const dtPulse = 0.5 + 0.5 * Math.sin(now * (isDtHighlighted ? 0.024 : 0.008));
-  const dtTapY = Math.sin(now * (isDtHighlighted ? 0.028 : 0.014)) * (isDtHighlighted ? 5 : 3);
+  const dtW = 320, dtH = 38, dtR = dtH / 2;
+  const dtX = 720, dtY = 196;
+  const dtPulse = 0.5 + 0.5 * Math.sin(now * (isDtHighlighted ? 0.024 : 0.009));
 
   c.save();
   if (isDtHighlighted) {
@@ -672,43 +769,78 @@ function drawTopBar(c, p, now) {
     c.scale(scalePop, scalePop);
     c.translate(-px(dtX + dtW / 2), -py(dtY + dtH / 2));
 
-    // Outer Neon Glow Radiance
-    c.strokeStyle = `rgba(251, 191, 36, ${0.45 + 0.5 * dtPulse})`;
-    c.lineWidth = ps(6 + dtPulse * 4);
+    // Outer Electric Golden Radiance
+    c.strokeStyle = `rgba(251, 191, 36, ${0.55 + 0.45 * dtPulse})`;
+    c.lineWidth = ps(7 + dtPulse * 5);
     rr(c, dtX - 3, dtY - 3, dtW + 6, dtH + 6, dtR + 3);
+    c.stroke();
+  } else {
+    // Normal rich neon aura (prevents dull/washed out look)
+    c.strokeStyle = `rgba(236, 72, 153, ${0.35 + 0.3 * dtPulse})`;
+    c.lineWidth = ps(4 + dtPulse * 3);
+    rr(c, dtX - 2, dtY - 2, dtW + 4, dtH + 4, dtR + 2);
     c.stroke();
   }
 
+  // Deep High-Contrast Cosmic Glass Base (ensures 100% readability over any background)
+  c.fillStyle = "rgba(18, 10, 32, 0.96)";
+  rr(c, dtX, dtY, dtW, dtH, dtR);
+  c.fill();
+
+  // Rich Inner Vibrant Neon Gradient
   const dtBg = c.createLinearGradient(px(dtX), 0, px(dtX + dtW), 0);
   if (isDtHighlighted) {
-    dtBg.addColorStop(0, "rgba(239, 68, 68, 0.92)");
-    dtBg.addColorStop(0.5, "rgba(245, 158, 11, 0.92)");
-    dtBg.addColorStop(1, "rgba(236, 72, 153, 0.92)");
+    dtBg.addColorStop(0, "rgba(255, 0, 127, 0.95)");
+    dtBg.addColorStop(0.35, "rgba(245, 158, 11, 0.95)");
+    dtBg.addColorStop(0.7, "rgba(236, 72, 153, 0.95)");
+    dtBg.addColorStop(1, "rgba(139, 92, 246, 0.95)");
   } else {
-    dtBg.addColorStop(0, "rgba(236, 72, 153, 0.28)");
-    dtBg.addColorStop(0.5, "rgba(245, 158, 11, 0.28)");
-    dtBg.addColorStop(1, "rgba(56, 189, 248, 0.28)");
+    dtBg.addColorStop(0, "rgba(236, 72, 153, 0.65)");
+    dtBg.addColorStop(0.5, "rgba(245, 158, 11, 0.55)");
+    dtBg.addColorStop(1, "rgba(56, 189, 248, 0.55)");
   }
   c.fillStyle = dtBg;
   rr(c, dtX, dtY, dtW, dtH, dtR);
   c.fill();
 
+  // Multi-Color Cycling Animated Neon Border
   const dtBorder = c.createLinearGradient(px(dtX), 0, px(dtX + dtW), 0);
   dtBorder.addColorStop(0, isDtHighlighted ? "#ffffff" : "#ec4899");
   dtBorder.addColorStop(0.5, "#fbbf24");
   dtBorder.addColorStop(1, isDtHighlighted ? "#ffffff" : "#38bdf8");
   c.strokeStyle = dtBorder;
-  c.lineWidth = ps(isDtHighlighted ? 2.8 : 1.8 + dtPulse * 0.8);
+  c.lineWidth = ps(isDtHighlighted ? 3.0 : 2.2 + dtPulse * 0.8);
   rr(c, dtX, dtY, dtW, dtH, dtR);
   c.stroke();
 
-  drawEmoji(c, isDtHighlighted ? "👉" : "👆", px(dtX + 18), py(dtY + dtH / 2 + dtTapY), ps(isDtHighlighted ? 19 : 17));
-  const dtText = isDtHighlighted ? "DOUBLE TAP FOR MAGIC ✨" : "DOUBLE TAP FOR MAGIC";
-  const dtTextColor = isDtHighlighted ? "#ffffff" : "#fef08a";
-  textC(c, dtText, dtX + 38, dtY + 23, isDtHighlighted ? 14.5 : 14, dtTextColor, 950);
-  drawMagicSparkle(c, dtX + dtW - 16, dtY + dtH / 2, isDtHighlighted ? 10 : 7, now, isDtHighlighted ? "#ffffff" : "#fbbf24");
+  // Interactive Double Tap Gesture (Tapping rhythm + ripple pulse)
+  const tapPhase = (now * 0.005) % 1;
+  const isTapDown = (tapPhase < 0.18) || (tapPhase > 0.28 && tapPhase < 0.46);
+  const dtTapY = isTapDown ? -3 : 0;
+
+  // Expanding click ripple circle from fingertip
+  if (tapPhase < 0.6) {
+    const ripR = (tapPhase / 0.6) * 14;
+    const ripAlpha = (1 - tapPhase / 0.6) * 0.75;
+    c.strokeStyle = `rgba(255, 255, 255, ${ripAlpha})`;
+    c.lineWidth = ps(1.5);
+    c.beginPath();
+    c.arc(px(dtX + 22), py(dtY + dtH / 2 - 4), ps(ripR), 0, Math.PI * 2);
+    c.stroke();
+  }
+
+  drawEmoji(c, isDtHighlighted ? "👉" : "👆", px(dtX + 22), py(dtY + dtH / 2 + dtTapY), ps(isDtHighlighted ? 20 : 18));
+
+  // Ultra-Crisp High-Legibility Title (No raw emoji in textC string to avoid glyph boxes)
+  const dtText = "DOUBLE TAP FOR MAGIC";
+  const dtTextColor = isDtHighlighted ? "#ffffff" : "#ffffff";
+  textC(c, dtText, dtX + 44, dtY + 25, isDtHighlighted ? 15 : 14.5, dtTextColor, 950);
+
+  // Twinkling Magic Sparkles (Using canvas diamond graphics for crisp stars)
+  drawMagicSparkle(c, dtX + dtW - 16, dtY + dtH / 2, isDtHighlighted ? 11 : 8, now, isDtHighlighted ? "#ffffff" : "#fbbf24");
+  drawMagicSparkle(c, dtX + dtW - 32, dtY + 12, isDtHighlighted ? 8 : 6, now + 350, "#fde047");
   if (isDtHighlighted) {
-    drawMagicSparkle(c, dtX + 32, dtY + 8, 7, now + 300, "#fde047");
+    drawMagicSparkle(c, dtX + 38, dtY + 10, 8, now + 600, "#ffffff");
   }
   c.restore();
 
@@ -7656,11 +7788,11 @@ export async function startRenderer() {
           }
           if (!running) break;
 
-          // Check if worker finished this frame (up to 45ms grace window)
+          // Check if worker finished this frame (up to 120ms grace window to absorb single-frame GC/draw spikes)
           if (!frameQueue.get(deliveryIndex)?.ready) {
-            const graceEnd = performance.now() + 45;
+            const graceEnd = performance.now() + 120;
             while (!frameQueue.get(deliveryIndex)?.ready && performance.now() < graceEnd && running) {
-              await new Promise(r => setImmediate(r));
+              await new Promise(r => setTimeout(r, 2));
             }
           }
 
