@@ -8,8 +8,8 @@ const USER_WINDOW_MS = 10000;
 const USER_MAX_EVENTS = 30;
 const GLOBAL_WINDOW_MS = 1000;
 const GLOBAL_MAX_EVENTS = 120;
-const SCREEN_NAMES = ['main', 'race', 'stats', 'supporters', 'menu', 'events'];
-const SCREEN_LABELS = { main: 'LIVE VOTING', race: 'RANK RACE', stats: 'LIVE STATS', supporters: 'TOP SUPPORTERS', menu: 'STREAM MENU', events: 'LIVE EVENTS' };
+const SCREEN_NAMES = ['main', 'race', 'stats', 'supporters', 'menu', 'events', 'commands'];
+const SCREEN_LABELS = { main: 'LIVE VOTING', race: 'RANK RACE', stats: 'LIVE STATS', supporters: 'TOP SUPPORTERS', menu: 'STREAM MENU', events: 'LIVE EVENTS', commands: 'CHAT COMMANDS' };
 const userBuckets = new Map();
 const globalTimes = [];
 
@@ -157,6 +157,7 @@ export function normalizeScreen(v){
   if(['support','supporters','top','mvp','4'].includes(x)) return 'supporters';
   if(['menu','guide','screens','help','5'].includes(x)) return 'menu';
   if(['event','events','interactive','6'].includes(x)) return 'events';
+  if(['command','commands','cmd','cmds','helpcommands','7'].includes(x)) return 'commands';
   return SCREEN_NAMES.includes(x)?x:null;
 }
 

@@ -267,14 +267,14 @@ function drawEmoji(c, emoji, cpx, cpy, sizePx) {
   c.fillText(String(emoji ?? ""), cpx, cpy);
 }
 
-function textC(c, v, x, y, size, color, weight = 700, align = "left") {
+function textC(c, v, x, y, size, color, weight = 700, align = "left", baseline = "alphabetic") {
   const w = safeWeight(weight);
   const sz = Math.max(8, Math.round(ps(size)));
   const f = getFontStr(w, sz);
   if (c._curFont !== f) { c.font = f; c._curFont = f; }
   c.fillStyle = color;
   c.textAlign = align;
-  c.textBaseline = "alphabetic";
+  c.textBaseline = baseline;
   c.fillText(String(v ?? ""), px(x), py(y));
 }
 
@@ -1151,13 +1151,14 @@ const NAV_SCREENS = [
   { id: "stats", num: "3", label: "STATS" },
   { id: "supporters", num: "4", label: "FANS" },
   { id: "menu", num: "5", label: "MENU" },
-  { id: "events", num: "6", label: "EVENTS" }
+  { id: "events", num: "6", label: "EVENTS" },
+  { id: "commands", num: "7", label: "COMMANDS" }
 ];
 
 function drawNavTabs(c, p, now, currentScreen, tr = null) {
-  const tabY = 320, tabH = 34, tabW = 152, gap = 8;
-  const totalW = NAV_SCREENS.length * tabW + (NAV_SCREENS.length - 1) * gap; // 952
-  const startX = 540 - totalW / 2; // 64
+  const tabY = 320, tabH = 34, tabW = 136, gap = 8;
+  const totalW = NAV_SCREENS.length * tabW + (NAV_SCREENS.length - 1) * gap; // 1000
+  const startX = 540 - totalW / 2; // 40 (perfect symmetry with 40px screen margins)
 
   let activeIdx = NAV_SCREENS.findIndex(s => s.id === currentScreen);
   if (activeIdx < 0) activeIdx = 0;
@@ -1177,7 +1178,7 @@ function drawNavTabs(c, p, now, currentScreen, tr = null) {
   }
   if (isNaN(indicatorX)) indicatorX = startX + activeIdx * (tabW + gap);
 
-  // Draw background containers for all 6 tabs
+  // Draw background containers for all 7 tabs
   NAV_SCREENS.forEach((s, idx) => {
     const tx = startX + idx * (tabW + gap);
     c.fillStyle = p.theme === "light" ? "rgba(255, 255, 255, 0.82)" : "rgba(15, 23, 42, 0.65)";
@@ -1215,7 +1216,8 @@ function drawNavTabs(c, p, now, currentScreen, tr = null) {
   drawGlint(c, indicatorX + tabW - 14, tabY + 8, 5, now * 2, "#ffffff");
   c.restore();
 
-  // Draw text labels for all tabs
+  // Draw text labels for all 7 tabs (100% mathematically centered horizontally & vertically)
+  const cy = tabY + tabH / 2;
   NAV_SCREENS.forEach((s, idx) => {
     const tx = startX + idx * (tabW + gap);
     const cx = tx + tabW / 2;
@@ -1224,13 +1226,10 @@ function drawNavTabs(c, p, now, currentScreen, tr = null) {
     const isLit = activeFraction > 0.45;
 
     const label = `${s.num}: ${s.label}`;
-    if (isLit) {
-      const textColor = p.theme === "light" ? "#ffffff" : "#0a1426";
-      textC(c, label, cx, tabY + 23, 14, textColor, 900, "center");
-    } else {
-      const textColor = p.theme === "light" ? "#475569" : "#94a3b8";
-      textC(c, label, cx, tabY + 23, 14, textColor, 700, "center");
-    }
+    const textColor = isLit
+      ? (p.theme === "light" ? "#ffffff" : "#0a1426")
+      : (p.theme === "light" ? "#475569" : "#94a3b8");
+    textC(c, label, cx, cy, 13, textColor, isLit ? 900 : 750, "center", "middle");
   });
 }
 
@@ -3225,41 +3224,42 @@ function drawMenuScreenContent(c, p, now) {
     { id: "stats", num: "3", title: "LIVE STATS", desc: "Vote rate, chat energy & analytics", cmd: "!screen stats" },
     { id: "supporters", num: "4", title: "TOP SUPPORTERS", desc: "Chat MVP & active viewer leaderboard", cmd: "!screen supporters" },
     { id: "events", num: "5", title: "LIVE EVENTS", desc: "Real-time interactions & milestones", cmd: "!screen events" },
-    { id: "theme", num: "6", title: "THEME SWITCH", desc: `Current: ${state.theme.toUpperCase()} (switch with !dark / !light)`, cmd: "!theme dark" }
+    { id: "commands", num: "6", title: "CHAT COMMANDS", desc: "Full directory of voice, vote & VFX commands", cmd: "!screen commands" },
+    { id: "theme", num: "7", title: "THEME SWITCH", desc: `Current: ${state.theme.toUpperCase()} (switch with !dark / !light)`, cmd: "!theme dark" }
   ];
 
-  const startY = 428, itemH = 120, gap = 12;
+  const startY = 428, itemH = 104, gap = 10;
   menuItems.forEach((item, i) => {
     const y = startY + i * (itemH + gap);
     const isActive = (item.id === curScreen);
 
     c.fillStyle = isActive ? (p.theme === "light" ? "#fffbeb" : "rgba(245, 197, 66, 0.12)") : p.card;
-    rr(c, 40, y, 1000, itemH, 18);
+    rr(c, 40, y, 1000, itemH, 16);
     c.fill();
 
     c.strokeStyle = isActive ? p.goldBright : p.cardBorder;
     c.lineWidth = ps(isActive ? 2.5 : 1.2);
-    rr(c, 40, y, 1000, itemH, 18);
+    rr(c, 40, y, 1000, itemH, 16);
     c.stroke();
 
     // Colored circle badge with number
     const bColor = p.rankGradients[i % p.rankGradients.length];
     c.fillStyle = bColor[0];
     c.beginPath();
-    c.arc(px(88), py(y + itemH / 2), ps(24), 0, Math.PI * 2);
+    c.arc(px(88), py(y + itemH / 2), ps(22), 0, Math.PI * 2);
     c.fill();
-    textC(c, item.num, 88, y + itemH / 2 + 9, 24, "#ffffff", 800, "center");
+    textC(c, item.num, 88, y + itemH / 2, 22, "#ffffff", 800, "center", "middle");
 
     // Title & description
-    textC(c, item.title, 140, y + 48, 24, isActive ? p.goldBright : p.text, 800);
-    textC(c, item.desc, 140, y + 84, 18, p.muted, 600);
+    textC(c, item.title, 136, y + 36, 21, isActive ? p.goldBright : p.text, 800);
+    textC(c, item.desc, 136, y + 70, 16, p.muted, 600);
 
     // Command box
-    const cmdW = 200, cmdH = 46, cmdX = 1000 - cmdW;
+    const cmdW = 200, cmdH = 42, cmdX = 1000 - cmdW;
     c.fillStyle = p.barBg;
     rr(c, cmdX, y + (itemH - cmdH) / 2, cmdW, cmdH, 10);
     c.fill();
-    textC(c, item.cmd, cmdX + cmdW / 2, y + (itemH - cmdH) / 2 + 30, 18, p.cyan, 800, "center");
+    textC(c, item.cmd, cmdX + cmdW / 2, y + itemH / 2, 16.5, p.cyan, 800, "center", "middle");
 
     if (isActive) {
       const actPulse = 0.5 + 0.5 * Math.sin(now * 0.008);
@@ -3268,13 +3268,13 @@ function drawMenuScreenContent(c, p, now) {
       c.beginPath();
       c.arc(px(cmdX - 85), py(y + (itemH / 2)), ps(5 + actPulse * 2.5), 0, Math.PI * 2);
       c.fill();
-      textC(c, "ACTIVE", cmdX - 18, y + 68, 16, p.goldBright, 800, "right");
+      textC(c, "ACTIVE", cmdX - 18, y + itemH / 2, 15, p.goldBright, 800, "right", "middle");
       c.restore();
     }
   });
 
   // Auto carousel indicator
-  const autoY = 1250, autoH = 68;
+  const autoY = 1238, autoH = 64;
   c.fillStyle = p.card;
   rr(c, 40, autoY, 1000, autoH, 16);
   c.fill();
@@ -3283,7 +3283,7 @@ function drawMenuScreenContent(c, p, now) {
   c.stroke();
 
   const isAuto = interactiveState().screenAuto;
-  textC(c, `Auto Rotation: ${isAuto ? "ENABLED (slides every 20s)" : "MANUAL CONTROL"}  •  Toggle with !auto on / !auto off`, 540, autoY + 42, 19, isAuto ? p.green : p.muted, 700, "center");
+  textC(c, `Auto Rotation: ${isAuto ? "ENABLED (slides every 20s)" : "MANUAL CONTROL"}  •  Toggle with !auto on / !auto off`, 540, autoY + autoH / 2, 18, isAuto ? p.green : p.muted, 700, "center", "middle");
 
   drawBottomStats(c, p, now);
 }
@@ -3345,6 +3345,117 @@ function drawEventsScreen(c, p, now) {
   drawEventsScreenContent(c, p, now);
 }
 
+function drawCommandsScreenContent(c, p, now) {
+  // Top header banner
+  const headY = 428, headH = 58;
+  c.fillStyle = p.card;
+  rr(c, 40, headY, 1000, headH, 16);
+  c.fill();
+  c.strokeStyle = p.cardBorder;
+  c.lineWidth = ps(1.2);
+  rr(c, 40, headY, 1000, headH, 16);
+  c.stroke();
+
+  drawCrown(c, 72, headY + 30, 11, p.goldBright);
+  textC(c, "INTERACTIVE CHAT COMMANDS DIRECTORY", 96, headY + headH / 2, 19, p.goldBright, 900, "left", "middle");
+  textC(c, "Type commands in chat • Instant live on-stream action! ⚡", 990, headY + headH / 2, 14.5, p.cyan, 750, "right", "middle");
+
+  const categories = [
+    {
+      badge: "🗳️ VOTING & CONTESTANT SUPPORT",
+      badgeColor: ["#ef4444", "#dc2626"],
+      items: [
+        { cmd: "!vote <1-17>", desc: "Cast official vote for contestant (e.g. !vote 7 or !vote Mary Kom). Unlimited votes!" },
+        { cmd: "!drop <no|emoji>", desc: "Release celebratory balloon drop or emojis for contestant (e.g. !drop 8, !drop 🎈)" },
+        { cmd: "!champion <no>", desc: "Crown your candidate with royal champion aura & golden victory fanfare" },
+        { cmd: "!clash <n1> <n2>", desc: "Trigger head-to-head vote duel • Type !buzzer to sound the official alarm" }
+      ]
+    },
+    {
+      badge: "🗣️ AI VOICE ANNOUNCER & AUDIO MUSIC",
+      badgeColor: ["#f59e0b", "#d97706"],
+      items: [
+        { cmd: "!announce on / off", desc: "Turn the natural AI speaker announcer ON or OFF in real time" },
+        { cmd: "!announce lang en/hi", desc: "Switch voice language: English (PrabhatNeural) or Hindi (SwaraNeural)" },
+        { cmd: "!announce mode 1 / 2", desc: "Mode 1: Announce vote only • Mode 2: Announce vote + candidate total votes" },
+        { cmd: "!track 1-40 • !vol", desc: "Change lofi background tracks (!track 1-40), set volume (!vol 1-100), or !track loop" }
+      ]
+    },
+    {
+      badge: "📺 SCREEN NAVIGATION & DISPLAY",
+      badgeColor: ["#38bdf8", "#0284c7"],
+      items: [
+        { cmd: "!screen <1-7>", desc: "Switch view: !screen vote, race, stats, fans, menu, events, commands" },
+        { cmd: "!next / !prev", desc: "Cycle to the next or previous screen tab with cyber slide transition" },
+        { cmd: "!auto on / off", desc: "Enable automated rotation between all 7 screen tabs every 20 seconds" },
+        { cmd: "!dark / !light", desc: "Instantly toggle stream theme between Midnight Dark and Studio Light modes" }
+      ]
+    },
+    {
+      badge: "✨ CYBER VFX & LIVE CELEBRATIONS",
+      badgeColor: ["#ec4899", "#db2777"],
+      items: [
+        { cmd: "!heart • !boom • !gift", desc: "Send floating emoji shower particles, explosive booms, and gift boxes" },
+        { cmd: "!aurora • !phoenix", desc: "Summon radiant full-screen animated aurora rays and fiery phoenix wings" },
+        { cmd: "!disco • !tornado • !dragon", desc: "Trigger laser dancefloor, swirling vortex tornado, or mythical dragon blast" },
+        { cmd: "Double-Tap Stream", desc: "Double-tap video on YouTube mobile to trigger golden magic celebration!" }
+      ]
+    }
+  ];
+
+  const startY = 498, cardH = 194, gap = 12;
+  categories.forEach((cat, cIdx) => {
+    const y = startY + cIdx * (cardH + gap);
+
+    // Card background
+    c.fillStyle = p.card;
+    rr(c, 40, y, 1000, cardH, 18);
+    c.fill();
+    c.strokeStyle = p.cardBorder;
+    c.lineWidth = ps(1.2);
+    rr(c, 40, y, 1000, cardH, 18);
+    c.stroke();
+
+    // Category Header Pill
+    const pillW = 390, pillH = 28, pillX = 58, pillY = y + 12;
+    const bGrad = c.createLinearGradient(px(pillX), 0, px(pillX + pillW), 0);
+    bGrad.addColorStop(0, cat.badgeColor[0]);
+    bGrad.addColorStop(1, cat.badgeColor[1]);
+    c.fillStyle = bGrad;
+    rr(c, pillX, pillY, pillW, pillH, pillH / 2);
+    c.fill();
+    textC(c, cat.badge, pillX + 16, pillY + pillH / 2, 13, "#ffffff", 850, "left", "middle");
+
+    // Command Rows
+    cat.items.forEach((item, rIdx) => {
+      const rowY = y + 48 + rIdx * 35;
+      const cmdTagW = 210, cmdTagH = 27, cmdTagX = 58;
+
+      // Dark tag backdrop
+      c.fillStyle = p.theme === "light" ? "rgba(0, 0, 0, 0.05)" : "rgba(0, 0, 0, 0.40)";
+      rr(c, cmdTagX, rowY, cmdTagW, cmdTagH, 6);
+      c.fill();
+      c.strokeStyle = p.theme === "light" ? "rgba(0, 0, 0, 0.10)" : "rgba(255, 255, 255, 0.12)";
+      c.lineWidth = ps(1);
+      rr(c, cmdTagX, rowY, cmdTagW, cmdTagH, 6);
+      c.stroke();
+
+      // Command text (Gold/Cyan)
+      textC(c, item.cmd, cmdTagX + cmdTagW / 2, rowY + cmdTagH / 2, 13, p.cyan, 850, "center", "middle");
+
+      // Explanation text
+      textC(c, item.desc, cmdTagX + cmdTagW + 18, rowY + cmdTagH / 2, 14, p.text, 650, "left", "middle");
+    });
+  });
+
+  drawBottomStats(c, p, now);
+}
+
+function drawCommandsScreen(c, p, now) {
+  drawHero(c, p, now, "CHAT COMMANDS");
+  drawCommandsScreenContent(c, p, now);
+}
+
 function drawScreenContent(screen, targetCtx, p, now) {
   if (screen === "main") drawVoteScreenContent(targetCtx, p, now);
   else if (screen === "race") drawRaceScreenContent(targetCtx, p, now);
@@ -3352,6 +3463,7 @@ function drawScreenContent(screen, targetCtx, p, now) {
   else if (screen === "supporters") drawSupportersScreenContent(targetCtx, p, now);
   else if (screen === "menu") drawMenuScreenContent(targetCtx, p, now);
   else if (screen === "events") drawEventsScreenContent(targetCtx, p, now);
+  else if (screen === "commands") drawCommandsScreenContent(targetCtx, p, now);
   else drawVoteScreenContent(targetCtx, p, now);
 }
 
