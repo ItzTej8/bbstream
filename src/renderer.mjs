@@ -6150,30 +6150,36 @@ function drawInteractive(targetCtx, p, now) {
       targetCtx.globalAlpha = clamp(gFade, 0, 1);
 
       const cx = 540, cy = 960;
-      const gRot = now * 0.0012;
+      const gRot = now * 0.0018;
 
-      // 1. Swirling Cosmic Nebula Spiral Arms
-      targetCtx.save();
-      targetCtx.translate(px(cx), py(cy));
-      targetCtx.rotate(gRot);
+      // 1. Volumetric Cosmic Nebula Core Bloom
+      const galBloom = targetCtx.createRadialGradient(px(cx), py(cy), ps(20), px(cx), py(cy), ps(480));
+      galBloom.addColorStop(0, "rgba(168, 85, 247, 0.45)");
+      galBloom.addColorStop(0.35, "rgba(56, 189, 248, 0.28)");
+      galBloom.addColorStop(0.7, "rgba(251, 191, 36, 0.12)");
+      galBloom.addColorStop(1, "rgba(0, 0, 0, 0)");
+      targetCtx.fillStyle = galBloom;
+      targetCtx.beginPath();
+      targetCtx.arc(px(cx), py(cy), ps(480), 0, Math.PI * 2);
+      targetCtx.fill();
 
-      for (let arm = 0; arm < 2; arm++) {
-        const armBase = arm * Math.PI;
-        for (let pt = 0; pt < 28; pt++) {
-          const dist = pt * 11;
+      // 2. Swirling Starlight Spiral Arms in World Coordinates
+      for (let arm = 0; arm < 4; arm++) {
+        const armBase = arm * (Math.PI / 2) + gRot;
+        for (let pt = 0; pt < 18; pt++) {
+          const dist = 32 + pt * 22;
           const a = armBase + pt * 0.22;
-          const sx = Math.cos(a) * dist;
-          const sy = Math.sin(a) * dist * 0.65;
-          const col = (pt % 3 === 0) ? "#a855f7" : (pt % 3 === 1) ? "#38bdf8" : "#fbbf24";
-          drawMagicSparkle(targetCtx, sx, sy, 3 + (pt % 3) * 1.5, now + pt * 80, col);
+          const sx = cx + Math.cos(a) * dist;
+          const sy = cy + Math.sin(a) * (dist * 0.72);
+          const col = (pt % 3 === 0) ? "#c084fc" : (pt % 3 === 1) ? "#38bdf8" : "#fbbf24";
+          drawMagicSparkle(targetCtx, sx, sy, 3.5 + (pt % 3) * 1.5, now + pt * 90, col);
         }
       }
 
-      // Singularity core
-      drawMagicSparkle(targetCtx, 0, 0, 20, now, "#ffffff");
-      targetCtx.restore();
+      // Singularity starlight core
+      drawMagicSparkle(targetCtx, cx, cy, 26, now, "#ffffff");
 
-      // 2. Galaxy Announcement Badge
+      // 3. Galaxy Announcement Badge
       const gW = 760, gH = 84, gX = 540 - gW / 2, gY = 660;
       targetCtx.fillStyle = "rgba(15, 6, 32, 0.95)";
       rr(targetCtx, gX, gY, gW, gH, 22);
@@ -6253,40 +6259,92 @@ function drawInteractive(targetCtx, p, now) {
       targetCtx.globalAlpha = clamp(dFade, 0, 1);
 
       const cx = 540, cy = 960;
-      const dRot = now * 0.002;
+      const dRot = now * 0.0022;
 
-      // 1. Rainbow Prismatic Light Beams
-      targetCtx.save();
-      targetCtx.translate(px(cx), py(cy));
-      targetCtx.rotate(dRot);
+      // 1. Volumetric Prism Bloom Halo
+      const dBloom = targetCtx.createRadialGradient(px(cx), py(cy), ps(20), px(cx), py(cy), ps(460));
+      dBloom.addColorStop(0, "rgba(255, 255, 255, 0.55)");
+      dBloom.addColorStop(0.4, "rgba(56, 189, 248, 0.28)");
+      dBloom.addColorStop(0.7, "rgba(244, 114, 182, 0.14)");
+      dBloom.addColorStop(1, "rgba(0, 0, 0, 0)");
+      targetCtx.fillStyle = dBloom;
+      targetCtx.beginPath();
+      targetCtx.arc(px(cx), py(cy), ps(460), 0, Math.PI * 2);
+      targetCtx.fill();
 
+      // 2. 8 Radiant Rainbow Prismatic Light Beams
       const beamColors = ["#f43f5e", "#fb923c", "#fbbf24", "#4ade80", "#22d3ee", "#818cf8", "#c084fc", "#f472b6"];
       for (let bi = 0; bi < 8; bi++) {
-        const bAngle = (bi * Math.PI) / 4;
-        targetCtx.strokeStyle = beamColors[bi];
-        targetCtx.lineWidth = ps(2.5);
+        const bAngle = (bi * Math.PI) / 4 + dRot;
+        const bLen = 420;
+        const bx = cx + Math.cos(bAngle) * bLen;
+        const by = cy + Math.sin(bAngle) * bLen;
+        const beamGrad = targetCtx.createLinearGradient(px(cx), py(cy), px(bx), py(by));
+        beamGrad.addColorStop(0, "rgba(255, 255, 255, 0.85)");
+        beamGrad.addColorStop(0.5, beamColors[bi]);
+        beamGrad.addColorStop(1, "rgba(255, 255, 255, 0)");
+        targetCtx.strokeStyle = beamGrad;
+        targetCtx.lineWidth = ps(3);
         targetCtx.beginPath();
-        targetCtx.moveTo(0, 0);
-        targetCtx.lineTo(Math.cos(bAngle) * ps(420), Math.sin(bAngle) * ps(420));
+        targetCtx.moveTo(px(cx), py(cy));
+        targetCtx.lineTo(px(bx), py(by));
         targetCtx.stroke();
       }
 
-      // 2. Central Brilliant Diamond Polyhedron
-      targetCtx.fillStyle = "rgba(255, 255, 255, 0.95)";
+      // 3. Central Brilliant 3D Diamond Polyhedron Facets
+      const dRad = 65;
+      const topPt = { x: cx, y: cy - dRad };
+      const botPt = { x: cx, y: cy + dRad };
+      const leftPt = { x: cx - dRad * 0.95, y: cy };
+      const rightPt = { x: cx + dRad * 0.95, y: cy };
+
+      targetCtx.fillStyle = "rgba(224, 242, 254, 0.88)";
       targetCtx.beginPath();
-      targetCtx.moveTo(0, -ps(60));
-      targetCtx.lineTo(ps(60), 0);
-      targetCtx.lineTo(0, ps(60));
-      targetCtx.lineTo(-ps(60), 0);
+      targetCtx.moveTo(px(cx), py(cy));
+      targetCtx.lineTo(px(topPt.x), py(topPt.y));
+      targetCtx.lineTo(px(leftPt.x), py(leftPt.y));
       targetCtx.closePath();
       targetCtx.fill();
 
-      targetCtx.strokeStyle = "#38bdf8";
+      targetCtx.fillStyle = "rgba(255, 255, 255, 0.98)";
+      targetCtx.beginPath();
+      targetCtx.moveTo(px(cx), py(cy));
+      targetCtx.lineTo(px(topPt.x), py(topPt.y));
+      targetCtx.lineTo(px(rightPt.x), py(rightPt.y));
+      targetCtx.closePath();
+      targetCtx.fill();
+
+      targetCtx.fillStyle = "rgba(56, 189, 248, 0.82)";
+      targetCtx.beginPath();
+      targetCtx.moveTo(px(cx), py(cy));
+      targetCtx.lineTo(px(botPt.x), py(botPt.y));
+      targetCtx.lineTo(px(leftPt.x), py(leftPt.y));
+      targetCtx.closePath();
+      targetCtx.fill();
+
+      targetCtx.fillStyle = "rgba(251, 207, 232, 0.88)";
+      targetCtx.beginPath();
+      targetCtx.moveTo(px(cx), py(cy));
+      targetCtx.lineTo(px(botPt.x), py(botPt.y));
+      targetCtx.lineTo(px(rightPt.x), py(rightPt.y));
+      targetCtx.closePath();
+      targetCtx.fill();
+
+      targetCtx.strokeStyle = "#ffffff";
       targetCtx.lineWidth = ps(3);
+      targetCtx.beginPath();
+      targetCtx.moveTo(px(topPt.x), py(topPt.y));
+      targetCtx.lineTo(px(rightPt.x), py(rightPt.y));
+      targetCtx.lineTo(px(botPt.x), py(botPt.y));
+      targetCtx.lineTo(px(leftPt.x), py(leftPt.y));
+      targetCtx.closePath();
       targetCtx.stroke();
 
-      drawMagicSparkle(targetCtx, 0, 0, 24, now, "#ffffff");
-      targetCtx.restore();
+      drawMagicSparkle(targetCtx, cx, cy, 26, now, "#ffffff");
+      drawMagicSparkle(targetCtx, topPt.x, topPt.y, 12, now + 150, "#38bdf8");
+      drawMagicSparkle(targetCtx, botPt.x, botPt.y, 12, now + 300, "#f472b6");
+      drawMagicSparkle(targetCtx, leftPt.x, leftPt.y, 12, now + 450, "#fef08a");
+      drawMagicSparkle(targetCtx, rightPt.x, rightPt.y, 12, now + 600, "#38bdf8");
 
       // Diamond Badge
       const dW = 760, dH = 84, dX = 540 - dW / 2, dY = 660;
@@ -6313,13 +6371,38 @@ function drawInteractive(targetCtx, p, now) {
       const targetNo = e.contestant || 1;
       const cItem = config.contestants.find(x => x.no === targetNo);
       const cName = cItem?.displayName || cItem?.name || `Contestant #${targetNo}`;
+      const bounds = getContestantBounds(targetNo);
 
-      const cW = 760, cH = 84, cX = 540 - cW / 2, cY = 660;
+      // 1. Stadium Fan Electric Green & Gold Aura around Contestant Card
+      const cheerPulse = 0.5 + 0.5 * Math.sin(now * 0.016);
+      targetCtx.strokeStyle = `rgba(16, 185, 129, ${0.45 + 0.45 * cheerPulse})`;
+      targetCtx.lineWidth = ps(6 + cheerPulse * 3);
+      rr(targetCtx, bounds.x - 5, bounds.y - 5, bounds.w + 10, bounds.h + 10, 20);
+      targetCtx.stroke();
+
+      targetCtx.strokeStyle = "#fbbf24";
+      targetCtx.lineWidth = ps(2.5);
+      rr(targetCtx, bounds.x - 2, bounds.y - 2, bounds.w + 4, bounds.h + 4, 18);
+      targetCtx.stroke();
+
+      // Corner celebration sparkles on the card
+      drawMagicSparkle(targetCtx, bounds.x + 15, bounds.y + 15, 8, now, "#34d399");
+      drawMagicSparkle(targetCtx, bounds.x + bounds.w - 15, bounds.y + 15, 8, now + 200, "#fbbf24");
+      drawMagicSparkle(targetCtx, bounds.x + 15, bounds.y + bounds.h - 15, 8, now + 400, "#fbbf24");
+      drawMagicSparkle(targetCtx, bounds.x + bounds.w - 15, bounds.y + bounds.h - 15, 8, now + 600, "#34d399");
+
+      // 2. Stadium Megaphone Cheer Announcement Badge
+      const cW = 760, cH = 84, cX = 540 - cW / 2;
+      const cY = (bounds.y < 600) ? (bounds.y + bounds.h + 20) : (bounds.y - cH - 20);
       targetCtx.fillStyle = "rgba(4, 30, 18, 0.95)";
       rr(targetCtx, cX, cY, cW, cH, 22);
       targetCtx.fill();
 
-      targetCtx.strokeStyle = "#10b981";
+      const cheerGrad = targetCtx.createLinearGradient(px(cX), 0, px(cX + cW), 0);
+      cheerGrad.addColorStop(0, "#10b981");
+      cheerGrad.addColorStop(0.5, "#fbbf24");
+      cheerGrad.addColorStop(1, "#10b981");
+      targetCtx.strokeStyle = cheerGrad;
       targetCtx.lineWidth = ps(3);
       rr(targetCtx, cX, cY, cW, cH, 22);
       targetCtx.stroke();

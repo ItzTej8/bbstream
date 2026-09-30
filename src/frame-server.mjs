@@ -3,6 +3,7 @@ import { config } from "./config.mjs";
 import { runtime } from "./runtime.mjs";
 import { on } from "./events.mjs";
 import { isMusicEnabled } from "./interactive.mjs";
+import { registerTtsAudioPlayer, queueVoteSpeech } from "./tts.mjs";
 
 const boundary = "bbframe";
 let server = null;
@@ -683,9 +684,24 @@ function queueSfx(fn) {
   setTimeout(fn, PIPELINE_AUDIO_DELAY_MS);
 }
 
+registerTtsAudioPlayer((pcm, volume = 1.0) => {
+  if (!isMusicEnabled()) return;
+  activeSounds.push({ pcm, offset: 0, volume });
+  if (activeSounds.length > 10) activeSounds.shift();
+});
+
 // Auto-trigger sound whenever a vote is accepted in the system
 on("vote", (vote) => {
   queueSfx(playVoteSound);
+  const cNo = Number(vote?.contestant || 1);
+  const cItem = config.contestants.find(c => c.no === cNo);
+  const cName = cItem?.displayName || cItem?.name || `#${cNo}`;
+  void queueVoteSpeech({
+    voter: vote?.name || "Viewer",
+    contestantNo: cNo,
+    candidateName: cName,
+    count: vote?.count || 1
+  });
 });
 
 on("interactive", (e) => {

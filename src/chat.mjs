@@ -1,6 +1,6 @@
 import { Masterchat, stringify } from "@stu43005/masterchat";
 import { config } from "./config.mjs";
-import { addChat, acceptVote, saveState, setOwner, state, stats, setVoting, setTheme, registerWatchingCount } from "./state.mjs";
+import { addChat, acceptVote, addManualVotes, saveState, setOwner, state, stats, setVoting, setTheme, registerWatchingCount } from "./state.mjs";
 import { runtime } from "./runtime.mjs";
 import { getActiveVideoId, resolveActiveVideoId } from "./youtube-resolver.mjs";
 import {
@@ -9,6 +9,7 @@ import {
   setContestantBuff, startQuiz, answerQuiz
 } from "./interactive.mjs";
 import { setBgMusicVolume, getBgMusicVolume, setMusicTrack, nextMusicTrack, prevMusicTrack, setTrackLoopMode, getTrackLoopMode, getMusicTrackInfo, MUSIC_TRACKS } from "./frame-server.mjs";
+import { setTtsEnabled, isTtsEnabled, setTtsTargetContestant, getTtsFilterStatus } from "./tts.mjs";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -57,9 +58,10 @@ export const KNOWN_COMMANDS = new Set([
   "magic", "spell", "shield", "protect", "meteor", "boost", "rocket", "nitro", "shoutout",
   "vortex", "blackhole", "dragon", "flamethrower", "matrix", "supernova", "champion", "trophy",
   "aurora", "borealis", "phoenix", "firebird", "disco", "laserstorm", "rave", "tornado", "twister", "cyclone", "clap", "applause",
+  "galaxy", "nebula", "milkyway", "tsunami", "ocean", "wave", "diamond", "gem", "prism",
   "confess", "gossip", "immunity", "danger", "supervote", "quiz", "trivia", "ans", "answer",
   "buzzer", "goldenbuzzer", "siren", "clash", "duel", "fortune", "lucky", "oracle", "spotlight", "beam", "streak", "combo",
-  "random", "mvp", "event", "close", "open", "status"
+  "random", "mvp", "event", "close", "open", "status", "predict", "winner", "addvotes", "addvote", "tts", "voice"
 ]);
 
 // Flexible vote & contestant alias map
@@ -113,6 +115,19 @@ registerAlias("scout", 17);
 registerAlias("scoutop", 17);
 registerAlias("tanmay", 17);
 
+export function resolveContestantToken(token) {
+  if (!token) return null;
+  const raw = String(token).replace(/^#/, "").trim();
+  const num = parseInt(raw, 10);
+  if (!isNaN(num) && num >= 1 && num <= config.contestants.length) return num;
+  const cleanKey = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (CONTESTANT_ALIASES.has(cleanKey)) return CONTESTANT_ALIASES.get(cleanKey);
+  for (const [k, v] of CONTESTANT_ALIASES) {
+    if (k.length >= 3 && (cleanKey.includes(k) || k.includes(cleanKey))) return v;
+  }
+  return null;
+}
+
 export function parseVote(message) {
   if (!message) return null;
   const cleanMsg = message.trim();
@@ -143,6 +158,39 @@ export function parseVote(message) {
   const cleanKey = cleanMsg.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (cleanKey && CONTESTANT_ALIASES.has(cleanKey) && !KNOWN_COMMANDS.has(cleanKey)) {
     return CONTESTANT_ALIASES.get(cleanKey);
+  }
+
+  return null;
+}
+
+export function parseVoteWithCount(message) {
+  if (!message) return null;
+  const cleanMsg = message.trim();
+
+  // 1. !addvotes <contestant> <count> or !addvote <contestant> <count>
+  const mAdd = cleanMsg.match(/^\s*!?addvotes?(?:\s+for)?(?:\s+contestant)?\s*#?\s*([a-zA-Z0-9_\-]+)(?:\s+\+?(\d+))?$/i);
+  if (mAdd) {
+    const contestant = resolveContestantToken(mAdd[1]);
+    if (contestant) {
+      const count = mAdd[2] ? parseInt(mAdd[2], 10) : 1;
+      return { contestant, count, isManualAdd: true };
+    }
+  }
+
+  // 2. !vote <contestant> <count> (e.g. !vote 2 100, !vote kanika 100, !vote 2 +50)
+  const mVoteCount = cleanMsg.match(/^\s*!?vote(?:\s+for)?(?:\s+contestant)?\s*#?\s*([a-zA-Z0-9_\-]+)\s+\+?(\d+)\s*$/i);
+  if (mVoteCount) {
+    const contestant = resolveContestantToken(mVoteCount[1]);
+    if (contestant) {
+      const count = parseInt(mVoteCount[2], 10);
+      return { contestant, count, isManualAdd: true };
+    }
+  }
+
+  // 3. Standard single vote
+  const singleVote = parseVote(message);
+  if (singleVote) {
+    return { contestant: singleVote, count: 1, isManualAdd: false };
   }
 
   return null;
@@ -501,17 +549,40 @@ export function startChatLoop({ signal }) {
               if (config.adminChannelIds.includes(String(id))) setOwner(id, author);
               addChat(author, message);
 
-              const votedContestant = parseVote(message);
-              if (votedContestant) {
-                const contestant = votedContestant;
+              const voteParsed = parseVoteWithCount(message);
+              if (voteParsed) {
+                const { contestant, count, isManualAdd } = voteParsed;
+                const isChannelOwner = Boolean(owner || (id && config.adminChannelIds.includes(String(id))));
+                const cName = config.contestants[contestant - 1]?.displayName || config.contestants[contestant - 1]?.name || `#${contestant}`;
                 runtime.chat.lastVoteCandidate = { author, contestant, at: Date.now() };
-                if (acceptVote(id, contestant, author)) {
-                  const cName = config.contestants[contestant - 1]?.displayName || config.contestants[contestant - 1]?.name || `#${contestant}`;
-                  console.log(`[vote] ${author} voted for #${contestant} (${cName}) (+1, unlimited)`);
-                  voteEvent({ userId: id, name: author, contestant, candidateName: cName });
-                  void saveState();
+
+                if (count > 1 || isManualAdd) {
+                  // Manual vote quantity requested: e.g. !vote 2 100 or !addvotes 2 100
+                  if (isChannelOwner) {
+                    const res = addManualVotes(contestant, count, author, id);
+                    if (res) {
+                      console.log(`[owner-vote] 👑 Channel Owner ${author} added +${count} votes to #${contestant} (${cName})! Total now: ${res.total}`);
+                      setAnnouncement(`👑 OWNER BOOST: ${author} gave +${count} VOTES to ${cName}!`, "OFFICIAL VOTE BOOST", 5000);
+                      voteEvent({ userId: id, name: author, contestant, candidateName: cName, count });
+                      void saveState();
+                    }
+                  } else {
+                    console.warn(`[vote] ⚠️ ${author} tried to add +${count} votes to #${contestant}, but is NOT the channel owner. Awarding 1 standard vote.`);
+                    if (acceptVote(id, contestant, author)) {
+                      console.log(`[vote] ${author} voted for #${contestant} (${cName}) (+1, unlimited)`);
+                      voteEvent({ userId: id, name: author, contestant, candidateName: cName, count: 1 });
+                      void saveState();
+                    }
+                  }
                 } else {
-                  console.warn(`[vote] rejected ${author} -> #${contestant}; votingOpen=${state.votingOpen}`);
+                  // Standard single vote
+                  if (acceptVote(id, contestant, author)) {
+                    console.log(`[vote] ${author} voted for #${contestant} (${cName}) (+1, unlimited)`);
+                    voteEvent({ userId: id, name: author, contestant, candidateName: cName, count: 1 });
+                    void saveState();
+                  } else {
+                    console.warn(`[vote] rejected ${author} -> #${contestant}; votingOpen=${state.votingOpen}`);
+                  }
                 }
                 continue;
               }
@@ -1109,6 +1180,46 @@ export function startChatLoop({ signal }) {
                   console.log(`[predict] ${author} predicted #${pTarget}`);
                 } else {
                   setAnnouncement(`🔮 PREDICTION: Type !predict <contestant> to lock in your Bigg Boss Winner pick!`, "PREDICTION HELP", 3500);
+                }
+              }
+              // --- Spoken TTS Audio Announcer Controls ---
+              else if (cmdToken === "tts" || cmdToken === "voice") {
+                const isOwnerOrAdmin = admin(id, owner, mod);
+                const ttsArg = (parts[1] || "").toLowerCase();
+                const ttsRest = parts.slice(2).join(" ").trim();
+
+                if (ttsArg === "on" || ttsArg === "enable" || ttsArg === "start") {
+                  if (isOwnerOrAdmin) {
+                    setTtsEnabled(true);
+                    setAnnouncement(`🗣️ Voice announcements ENABLED by ${author}!`, "TTS VOICE", 3500);
+                  }
+                } else if (ttsArg === "off" || ttsArg === "disable" || ttsArg === "mute" || ttsArg === "stop") {
+                  if (isOwnerOrAdmin) {
+                    setTtsEnabled(false);
+                    setAnnouncement(`🔇 Voice announcements DISABLED by ${author}!`, "TTS VOICE", 3500);
+                  }
+                } else if (ttsArg === "status") {
+                  const st = isTtsEnabled() ? "ENABLED" : "DISABLED";
+                  const filt = getTtsFilterStatus();
+                  setAnnouncement(`🗣️ TTS: ${st} • Filter: ${filt}`, "TTS STATUS", 4000);
+                } else if (ttsArg === "all" || ttsArg === "reset" || ttsArg === "clear") {
+                  if (isOwnerOrAdmin) {
+                    setTtsTargetContestant("all");
+                    setAnnouncement(`🗣️ TTS voice will now announce votes for ALL CONTESTANTS!`, "TTS FILTER", 4000);
+                  }
+                } else {
+                  const targetQ = (ttsArg === "only" || ttsArg === "contestant") ? ttsRest : parts.slice(1).join(" ");
+                  const cTarget = resolveContestant(targetQ);
+                  if (cTarget && isOwnerOrAdmin) {
+                    const cItem = config.contestants.find(x => x.no === cTarget);
+                    const cName = cItem?.displayName || cItem?.name || `#${cTarget}`;
+                    setTtsTargetContestant(String(cTarget));
+                    setAnnouncement(`🗣️ TTS voice will announce votes ONLY for #${cTarget} ${cName}!`, "TTS FILTER", 4500);
+                  } else {
+                    const st = isTtsEnabled() ? "ON" : "OFF";
+                    const filt = getTtsFilterStatus();
+                    setAnnouncement(`🗣️ TTS (${st}, Filter: ${filt}): Use !tts on/off • !tts all • !tts <contestant>`, "TTS INFO", 4000);
+                  }
                 }
               }
               else if (cmdToken === "help" || cmdToken === "commands") {

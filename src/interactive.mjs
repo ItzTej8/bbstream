@@ -101,7 +101,7 @@ export function viewerEvent({userId,name,type,contestant=0,emoji='',payload={},d
   return true;
 }
 
-export function voteEvent({userId,name,contestant,candidateName}){
+export function voteEvent({userId,name,contestant,candidateName,count=1}){
   const n=clean(name)||'Viewer';
   const s=ensure();
   const key=String(userId||n);
@@ -109,11 +109,11 @@ export function voteEvent({userId,name,contestant,candidateName}){
   const now=Date.now();
   const combo=old && now-old.at<6000 ? old.count+1 : 1;
   s.combo.set(Number(contestant),{count:combo,at:now,name:candidateName});
-  s.topViewers.set(key,{id:key,name:n,interactions:(s.topViewers.get(key)?.interactions||0)+1,lastAt:now});
+  s.topViewers.set(key,{id:key,name:n,interactions:(s.topViewers.get(key)?.interactions||0)+count,lastAt:now});
   s.selectedContestant=Number(contestant);
-  addEvent({type:'vote',userId:key,name:n,contestant:Number(contestant),candidateName,durationMs:5500,combo});
+  addEvent({type:'vote',userId:key,name:n,contestant:Number(contestant),candidateName,count,durationMs:5500,combo});
   if(combo>=3) addEvent({type:'combo',contestant:Number(contestant),candidateName,count:combo,durationMs:3500});
-  emit('vote-announcement',{name:n,candidateName,contestant:Number(contestant)});
+  emit('vote-announcement',{name:n,candidateName,contestant:Number(contestant),count});
 }
 
 export function prune(now=Date.now()){

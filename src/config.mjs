@@ -52,5 +52,9 @@ export const config=Object.freeze({
   screenTransitionMs:Math.max(250,Math.floor(num("SCREEN_TRANSITION_MS",650))),
   timeLeftText:String(process.env.TIME_LEFT_TEXT||"2D 5H 45M").trim()||"2D 5H 45M",
   nowPlayingText:String(process.env.NOW_PLAYING_TEXT||"Bigg Boss Theme Song").trim()||"Bigg Boss Theme Song",
+  ttsEnabled:bool("TTS_ENABLED",true),
+  ttsMinIntervalMs:Math.max(1000,Math.floor(num("TTS_MIN_INTERVAL_MS",3500))),
+  ttsSpecificContestants:csv("TTS_SPECIFIC_CONTESTANTS"),
+  ttsVolume:Math.max(0.1,Math.min(2.0,num("TTS_VOLUME",1.0))),
 });
 export function validateConfig(){const errors=[],warnings=[];if(!config.streamKey||/PUT_YOUR|YOUR_|CHANGE_ME/i.test(config.streamKey))errors.push("YOUTUBE_STREAM_KEY is not configured");if(!config.videoId&&!config.youtubeApiKey)errors.push("Neither YOUTUBE_VIDEO_ID nor YOUTUBE_API_KEY is configured in .env");if(!config.adminChannelIds.length)warnings.push("ADMIN_CHANNEL_IDS is empty; owner/mod can still use theme and voting controls");return{errors,warnings};}
