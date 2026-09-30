@@ -166,10 +166,11 @@ export async function fetchLiveVideoIdFromYouTubeApi({
  * and then return the resolved video ID.
  */
 export async function waitForLiveStreamByTitle({
-  timeoutSeconds = 180,
-  initialDelaySeconds = config.youtubeIndexWaitSeconds || 15,
+  timeoutSeconds = 90,
+  initialDelaySeconds = config.youtubeIndexWaitSeconds || 10,
   retryIntervalSeconds = 8,
   minScore = 0.45,
+  maxAttempts = 5,
   signal
 } = {}) {
   const isDynamicEnabled = Boolean(
@@ -190,6 +191,18 @@ export async function waitForLiveStreamByTitle({
     return fallbackId;
   }
 
+  // 1. First, check channel directly via zero-quota live scraper (saves 100 API quota points!)
+  try {
+    const scraped = await resolveLiveVideoIdFromChannel();
+    if (scraped) {
+      console.log(`[youtube-resolver] 🎯 Zero-quota channel scraper found active live stream: ${scraped}`);
+      cachedVideoId = scraped;
+      process.env.YOUTUBE_VIDEO_ID = scraped;
+      if (runtime?.chat) runtime.chat.videoId = scraped;
+      return scraped;
+    }
+  } catch {}
+
   console.log(`[youtube-resolver] ⏳ Waiting for stream to go live on YouTube RTMP before querying YouTube API...`);
 
   // Step 1: Wait for RTMP encoder connection (connectedHint or outputStartedAt > 0)
@@ -198,8 +211,8 @@ export async function waitForLiveStreamByTitle({
     if (runtime?.encoder?.connectedHint || (runtime?.encoder?.outputStartedAt && runtime.encoder.outputStartedAt > 0)) {
       break;
     }
-    // If 45s passed and encoder status is running or has output, break
-    if (Date.now() - encoderWaitStart > 45000 && runtime?.encoder?.status === "running") {
+    // If 30s passed and encoder status is running or has output, proceed
+    if (Date.now() - encoderWaitStart > 30000 && runtime?.encoder?.status === "running") {
       console.log(`[youtube-resolver] Encoder running. Proceeding to YouTube API check...`);
       break;
     }
@@ -218,13 +231,13 @@ export async function waitForLiveStreamByTitle({
 
   if (signal?.aborted) return fallbackId;
 
-  console.log(`[youtube-resolver] 🔍 Querying YouTube Data API for live stream matching title: "${targetTitle}"`);
+  console.log(`[youtube-resolver] 🔍 Querying YouTube Data API for live stream matching title: "${targetTitle}" (max ${maxAttempts} attempts)`);
 
-  // Step 3: Poll YouTube Data API with requireTitleMatch=true
+  // Step 3: Poll YouTube Data API with maximum 5 attempts to conserve quota
   const startTime = Date.now();
   let attempt = 0;
 
-  while (!signal?.aborted) {
+  while (!signal?.aborted && attempt < maxAttempts) {
     attempt++;
     const elapsedSec = Math.round((Date.now() - startTime) / 1000);
 
@@ -244,7 +257,12 @@ export async function waitForLiveStreamByTitle({
     }
 
     if (apiQuotaExceeded) {
-      console.log(`[youtube-resolver] ⚠️ YouTube API quota exceeded; proceeding immediately with resolved or fallback ID.`);
+      console.log(`[youtube-resolver] ⚠️ YouTube API quota exceeded; falling back immediately to video ID from .env: ${fallbackId}`);
+      break;
+    }
+
+    if (attempt >= maxAttempts) {
+      console.log(`[youtube-resolver] ⚠️ Maximum search attempts (${maxAttempts}) reached. Falling back to video ID from .env: ${fallbackId}`);
       break;
     }
 
@@ -253,7 +271,7 @@ export async function waitForLiveStreamByTitle({
       break;
     }
 
-    console.log(`[youtube-resolver] Live stream matching "${targetTitle}" not indexed yet (attempt ${attempt}, ${elapsedSec}s elapsed). Retrying in ${retryIntervalSeconds}s...`);
+    console.log(`[youtube-resolver] Live stream matching "${targetTitle}" not indexed yet (attempt ${attempt}/${maxAttempts}, ${elapsedSec}s elapsed). Retrying in ${retryIntervalSeconds}s...`);
 
     for (let s = 0; s < retryIntervalSeconds; s++) {
       if (signal?.aborted) return fallbackId;
@@ -261,24 +279,13 @@ export async function waitForLiveStreamByTitle({
     }
   }
 
-  // Fallback if timeout or quota limit reached
-  let fallbackDiscovered = null;
-  if (!apiQuotaExceeded) {
-    fallbackDiscovered = await fetchLiveVideoIdFromYouTubeApi({
-      liveTitle: targetTitle,
-      requireTitleMatch: false
-    });
-  }
-  if (!fallbackDiscovered) {
-    fallbackDiscovered = await resolveLiveVideoIdFromChannel();
-  }
-
-  const finalVideoId = fallbackDiscovered || fallbackId;
+  // Fallback to .env video ID
+  const finalVideoId = fallbackId;
   if (finalVideoId) {
     cachedVideoId = finalVideoId;
     process.env.YOUTUBE_VIDEO_ID = finalVideoId;
     if (runtime?.chat) runtime.chat.videoId = finalVideoId;
-    console.log(`[youtube-resolver] Proceeding with video ID: ${finalVideoId}`);
+    console.log(`[youtube-resolver] Proceeding with fallback video ID from .env: ${finalVideoId}`);
   }
   return finalVideoId;
 }
@@ -371,8 +378,12 @@ export function startDynamicVideoIdPoller({ intervalMs = 10 * 60 * 1000, signal 
     if (signal?.aborted) return;
     try {
       const prev = getActiveVideoId();
-      const updated = await resolveActiveVideoId({ force: true, requireTitleMatch: true });
+      // Use zero-quota scraper to check if live stream video ID changed on channel without draining search quota
+      const updated = await resolveLiveVideoIdFromChannel();
       if (updated && updated !== prev) {
+        cachedVideoId = updated;
+        process.env.YOUTUBE_VIDEO_ID = updated;
+        if (runtime?.chat) runtime.chat.videoId = updated;
         console.log(`[youtube-resolver] 🔄 Stream video ID changed: ${prev} -> ${updated}`);
       }
     } catch {}

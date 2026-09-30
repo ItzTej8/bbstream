@@ -101,6 +101,7 @@ export function createEncoder() {
     args.push(
       "-c:v", "libx264",
       "-preset", config.preset || "ultrafast",
+      "-tune", "zerolatency",
       "-threads", String(x264Threads),
       "-slices", String(slices),
       "-pix_fmt", "yuv420p",

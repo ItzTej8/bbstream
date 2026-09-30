@@ -44,20 +44,21 @@ async function main(){
   const encoderStop=startEncoderSupervisor();
   const watchdogStop=startWatchdog({signal:controller.signal,onMemoryPressure:()=>void shutdown("memory-pressure")});
 
-  // Once stream goes live on RTMP, wait for YouTube Data API to index broadcast,
-  // dynamically grab the video ID matching YOUTUBE_LIVE_TITLE, and then proceed to Masterchat:
+  // Launch subscriber loop and live likes/views monitor immediately on startup
+  startSubscriberLoop({signal:controller.signal});
+  startLikesMonitor({signal:controller.signal});
+
+  // Dynamically resolve live stream video ID (up to max 5 search attempts, with .env fallback)
   (async () => {
     try {
       const liveId = await waitForLiveStreamByTitle({ signal: controller.signal });
       if (controller.signal.aborted) return;
-      console.log(`[main] 🎯 Live stream confirmed (${liveId || getActiveVideoId()}). Launching Masterchat, subscriber loop, and likes monitor...`);
+      console.log(`[main] 🎯 Live stream confirmed (${liveId || getActiveVideoId()}). Launching Masterchat and video ID poller...`);
     } catch (err) {
       console.warn(`[main] Live stream resolution warning: ${err.message}. Proceeding to Masterchat...`);
     }
     if (controller.signal.aborted) return;
     startChatLoop({signal:controller.signal}).catch(e=>{if(!controller.signal.aborted)console.error(`[chat] fatal ${e.message}`);});
-    startSubscriberLoop({signal:controller.signal});
-    startLikesMonitor({signal:controller.signal});
     startDynamicVideoIdPoller({signal:controller.signal});
   })();
 

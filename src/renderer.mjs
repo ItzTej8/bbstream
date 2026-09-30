@@ -7456,7 +7456,7 @@ export async function startRenderer() {
   if (numWorkers > 1) {
     const W = config.renderWidth, H = config.renderHeight;
     const bufSize = W * H * 4;
-    const SLOTS_PER_WORKER = 3;
+    const SLOTS_PER_WORKER = 4;
     const workerBuffers = [];
 
     for (let i = 0; i < numWorkers; i++) {
@@ -7540,11 +7540,11 @@ export async function startRenderer() {
     ];
 
     const frameInterval = 1000 / config.renderFps;
-    const PIPELINE_DEPTH = Math.max(8, numWorkers * 3);
+    const PIPELINE_DEPTH = Math.max(12, numWorkers * 3);
     const frameQueue = new Map();
     const streamStartTime = Date.now();
     const workerInFlight = new Array(numWorkers).fill(0);
-    const MAX_IN_FLIGHT_PER_WORKER = 2;
+    const MAX_IN_FLIGHT_PER_WORKER = 3;
     const workerSlots = new Array(numWorkers).fill(0);
     const workerStats = Array.from({ length: numWorkers }, () => ({ frames: 0, totalMs: 0 }));
     let nextDispatchIndex = 0;
@@ -7617,8 +7617,8 @@ export async function startRenderer() {
     dispatchNextIdleWorker();
 
     return await new Promise(async resolve => {
-      // 1. Warm-up prefill: buffer 6-8 frames ahead so heavy animations never starve the delivery loop
-      const prefillTarget = Math.max(6, Math.min(10, numWorkers * 2));
+      // 1. Warm-up prefill: buffer 8-12 frames ahead so heavy animations never starve the delivery loop
+      const prefillTarget = Math.max(8, Math.min(12, numWorkers * 3));
       const prefillTimeout = performance.now() + 5000;
       while (running && performance.now() < prefillTimeout) {
         let readyCount = 0;
@@ -7649,9 +7649,9 @@ export async function startRenderer() {
 
           // Deliver all frames due up to targetIndex so video never drifts or falls behind real-time
           while (deliveryIndex <= targetIndex && running) {
-            // Give worker up to 16ms grace to finish this exact delivery slot
+            // Give worker up to 35ms grace to finish this exact delivery slot
             if (!frameQueue.get(deliveryIndex)?.ready) {
-              const graceEnd = performance.now() + 16;
+              const graceEnd = performance.now() + 35;
               while (!frameQueue.get(deliveryIndex)?.ready && performance.now() < graceEnd && running) {
                 await new Promise(r => setImmediate(r));
               }

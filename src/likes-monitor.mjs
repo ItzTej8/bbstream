@@ -223,6 +223,7 @@ export function startLikesMonitor({ signal, intervalMs = 5000 } = {}) {
 
         if (views > 0) {
           state.liveViews = views;
+          state.totalViews = views;
           runtime.chat.viewCount = views;
         }
 

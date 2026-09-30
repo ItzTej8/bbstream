@@ -10,6 +10,7 @@ import {
 } from "./interactive.mjs";
 import { setBgMusicVolume, getBgMusicVolume, setMusicTrack, nextMusicTrack, prevMusicTrack, setTrackLoopMode, getTrackLoopMode, getMusicTrackInfo, MUSIC_TRACKS } from "./frame-server.mjs";
 import { setTtsEnabled, isTtsEnabled, setTtsVoice, getTtsVoice, setTtsTargetContestant, getTtsFilterStatus } from "./tts.mjs";
+import { fetchLiveSocialCounts } from "./likes-monitor.mjs";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -367,13 +368,26 @@ export async function fetchYouTubeViewersAndViews(videoId) {
           const orig = vcr.originalViewCount ?? vcr.unlabeledViewCountValue?.simpleText ?? vcr.extraShortViewCount?.simpleText;
           if (orig !== undefined && orig !== null) {
             const parsed = parseInt(String(orig).replace(/,/g, ""), 10);
-            if (!isNaN(parsed) && parsed >= 0) viewers = parsed;
+            if (!isNaN(parsed) && parsed >= 0) {
+              if (vcr.isLive) {
+                viewers = parsed;
+              } else {
+                views = parsed;
+              }
+            }
           }
-          if (viewers === null && vcr.viewCount?.simpleText) {
-            const m = vcr.viewCount.simpleText.match(/(\d[\d,.]*)/);
+          const textStr = vcr.viewCount?.simpleText || vcr.viewCount?.runs?.map(r => r.text).join("") || "";
+          if (textStr) {
+            const m = textStr.match(/(\d[\d,.]*)/);
             if (m) {
               const parsed = parseInt(m[1].replace(/,/g, ""), 10);
-              if (!isNaN(parsed) && parsed >= 0) viewers = parsed;
+              if (!isNaN(parsed) && parsed >= 0) {
+                if (/watching/i.test(textStr) || vcr.isLive) {
+                  viewers = parsed;
+                } else {
+                  views = parsed;
+                }
+              }
             }
           }
         }
@@ -401,11 +415,21 @@ export async function fetchYouTubeViewersAndViews(videoId) {
     }
   } catch {}
 
+  // 3. Tertiary: Socialcounts live view API fallback
+  if (views === null || views <= 0) {
+    try {
+      const sc = await fetchLiveSocialCounts(videoId);
+      if (sc && sc.views > 0) {
+        views = sc.views;
+      }
+    } catch {}
+  }
+
   return { viewers, views };
 }
 
 async function pollViewerCount(getVideoId, signal) {
-  // Poll YouTube for live viewer count and total views every 10 seconds
+  // Poll YouTube for live viewer count and total views every 8 seconds
   while (!signal.aborted) {
     try {
       const videoId = typeof getVideoId === "function" ? getVideoId() : getVideoId;
@@ -418,13 +442,14 @@ async function pollViewerCount(getVideoId, signal) {
         if (data.views !== null && data.views >= 0) {
           runtime.chat.viewCount = data.views;
           state.totalViews = data.views;
+          state.liveViews = data.views;
         }
       }
     } catch { /* ignore fetch errors */ }
 
-    // Wait 10 seconds between polls
+    // Wait 8 seconds between polls
     await new Promise(r => {
-      const t = setTimeout(r, 10000);
+      const t = setTimeout(r, 8000);
       signal.addEventListener("abort", () => { clearTimeout(t); r(); }, { once: true });
     });
   }
