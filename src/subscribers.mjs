@@ -26,58 +26,40 @@ function parseSubscriberString(str) {
   return Math.round(num * mult);
 }
 
-async function fetchPublicSubscriberCount(channelId) {
-  const vid = getActiveVideoId() || config.videoId || "Vf0uvhsC4UI";
-  // 1. Check active watch page first (contains freshest channel subscriberCountText)
-  try {
-    const res = await fetch(`https://www.youtube.com/watch?v=${vid}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
-      }
-    });
-    if (res.ok) {
-      const html = await res.text();
-      const mSimple = html.match(/"subscriberCountText":\s*\{[^}]*"simpleText":\s*"([^"]+)"/i);
-      if (mSimple?.[1]) {
-        const parsed = parseSubscriberString(mSimple[1]);
-        if (parsed) return parsed;
-      }
-      const mLabel = html.match(/"subscriberCountText":\s*\{[^}]*"label":\s*"([^"]+)"/i);
-      if (mLabel?.[1]) {
-        const parsed = parseSubscriberString(mLabel[1]);
-        if (parsed) return parsed;
-      }
-    }
-  } catch {}
+let cachedPublicSubCount = 0;
+let lastPublicSubFetchAt = 0;
 
-  // 2. Fallback to channel page
+async function fetchPublicSubscriberCount(channelId) {
+  const now = Date.now();
+  if (cachedPublicSubCount > 0 && (now - lastPublicSubFetchAt) < 60000) {
+    return cachedPublicSubCount;
+  }
   const cid = channelId || config.channelId || "UCUNbognrXqUWzJOtrK8YP2A";
-  try {
-    const res = await fetch(`https://www.youtube.com/channel/${cid}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
+
+  // 1. Official YouTube Data API v3 (Ultra-fast ~100ms, only 200 bytes JSON, costs only 1 unit)
+  if (config.youtubeApiKey) {
+    try {
+      const res = await fetch(`https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${cid}&key=${config.youtubeApiKey}`, {
+        signal: AbortSignal.timeout(4000)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const subStr = data?.items?.[0]?.statistics?.subscriberCount;
+        const total = parseInt(subStr, 10);
+        if (Number.isFinite(total) && total > 0) {
+          cachedPublicSubCount = total;
+          lastPublicSubFetchAt = now;
+          return total;
+        }
       }
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-    const mSimple = html.match(/"subscriberCountText":\s*\{[^}]*"simpleText":\s*"([^"]+)"/i);
-    if (mSimple?.[1]) {
-      const parsed = parseSubscriberString(mSimple[1]);
-      if (parsed) return parsed;
-    }
-    const mLabel = html.match(/"subscriberCountText":\s*\{[^}]*"label":\s*"([^"]+)"/i);
-    if (mLabel?.[1]) {
-      const parsed = parseSubscriberString(mLabel[1]);
-      if (parsed) return parsed;
-    }
-    const mAny = html.match(/([\d.]+\s*[KkMmBb]?)\s*subscribers/i);
-    if (mAny?.[1]) {
-      const parsed = parseSubscriberString(mAny[1]);
-      if (parsed) return parsed;
-    }
-  } catch {}
+    } catch {}
+  }
+
+  // 2. Return last known subscriber count if already set (avoid heavy multi-megabyte HTML parsing on main thread)
+  if (lastKnownSubCount > 0) {
+    return lastKnownSubCount;
+  }
+
   return null;
 }
 
@@ -209,10 +191,12 @@ export async function fetchLiveSubscribers() {
       signal: controller.signal
     });
     clearTimeout(timeout);
-    console.log("[subscribers] studio status:", res.status);
-
     if (res.status === 401 || !res.ok) {
-      nextStudioAttemptAt = Date.now() + 5 * 60 * 1000; // Backoff 5 minutes
+      if (!studio401Warned) {
+        studio401Warned = true;
+        console.log(`[subscribers] studio status: ${res.status} (expired session), backed off 1h — using official YouTube Data API channel stats`);
+      }
+      nextStudioAttemptAt = Date.now() + 60 * 60 * 1000; // Backoff 1 hour to prevent event-loop stalls
       const pubTotal = await fetchPublicSubscriberCount(config.channelId);
       if (typeof pubTotal === "number" && pubTotal > 0) {
         lastKnownSubCount = pubTotal;
@@ -265,7 +249,7 @@ export function getSubscriberCount() {
   return runtime.chat?.subscriberCount || state?.subscriberCount || lastKnownSubCount;
 }
 
-export function startSubscriberLoop({ signal, intervalMs = 30000 } = {}) {
+export function startSubscriberLoop({ signal, intervalMs = 60000 } = {}) {
   if (pollerActive) return;
   pollerActive = true;
 

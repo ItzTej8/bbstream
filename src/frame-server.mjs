@@ -1121,8 +1121,8 @@ export function publishFrame(frame, rawBuf = null) {
   if (rawBuf && rawClients.size > 0) {
     for (const client of [...rawClients]) {
       if (client.closed || !client.res.writable) continue;
-      // Allow up to 96MB TCP buffer (~26 raw frames) so encoding keyframe bursts never drop frames
-      if (client.res.writableLength > 96_000_000) {
+      // Allow up to 160MB TCP buffer (~43 raw frames) so encoding keyframe bursts or CPU load spikes never drop frames
+      if (client.res.writableLength > 160_000_000) {
         if (runtime.encoder?.connectedHint) {
           runtime.renderer.dropped++;
         }

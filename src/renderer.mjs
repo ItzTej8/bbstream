@@ -7638,55 +7638,61 @@ export async function startRenderer() {
       const deliveryLoop = async () => {
         while (running) {
           const now = performance.now();
-          const elapsedSec = (now - deliveryStart) / 1000;
-          let targetIndex = Math.floor(elapsedSec * config.renderFps);
+          const targetTime = deliveryStart + (deliveryIndex * frameInterval);
 
-          // If main-thread I/O paused the event loop by more than 2 frames, realign deliveryStart so we don't burst-drop frames
-          if (targetIndex > deliveryIndex + 2) {
-            deliveryStart = performance.now() - (deliveryIndex * frameInterval);
-            targetIndex = deliveryIndex;
+          // If main-thread I/O paused the event loop by more than 1 frame,
+          // realign deliveryStart so we maintain continuous 30fps pacing without cascade drops
+          if (now > targetTime + frameInterval) {
+            deliveryStart = now - (deliveryIndex * frameInterval);
           }
 
-          // Deliver all frames due up to targetIndex so video never drifts or falls behind real-time
-          while (deliveryIndex <= targetIndex && running) {
-            // Give worker up to 35ms grace to finish this exact delivery slot
-            if (!frameQueue.get(deliveryIndex)?.ready) {
-              const graceEnd = performance.now() + 35;
-              while (!frameQueue.get(deliveryIndex)?.ready && performance.now() < graceEnd && running) {
-                await new Promise(r => setImmediate(r));
-              }
-            }
+          // Wait until this frame's target wall-clock delivery time
+          const waitMs = (deliveryStart + deliveryIndex * frameInterval) - performance.now();
+          if (waitMs > 16) {
+            await new Promise(r => setTimeout(r, Math.floor(waitMs - 8)));
+          }
+          while ((deliveryStart + deliveryIndex * frameInterval) > performance.now() && running) {
+            await new Promise(r => setImmediate(r));
+          }
+          if (!running) break;
 
-            const item = frameQueue.get(deliveryIndex);
-            if (item && item.ready) {
-              fpsFrames++;
-              if (isRaw) {
-                lastPublishedRaw = item.rawBuf;
-                publishFrame(null, lastPublishedRaw);
-              } else {
-                lastPublishedJpeg = item.jpegBuf;
-                publishFrame(item.jpegBuf);
-              }
-              runtime.renderer.frames++;
-              runtime.renderer.lastFrameAt = Date.now();
-              runtime.renderer.lastDrawMs = Math.round(item.renderMs || 0);
-              frameQueue.delete(deliveryIndex);
+          // Check if worker finished this frame (up to 45ms grace window)
+          if (!frameQueue.get(deliveryIndex)?.ready) {
+            const graceEnd = performance.now() + 45;
+            while (!frameQueue.get(deliveryIndex)?.ready && performance.now() < graceEnd && running) {
+              await new Promise(r => setImmediate(r));
+            }
+          }
+
+          const item = frameQueue.get(deliveryIndex);
+          if (item && item.ready) {
+            fpsFrames++;
+            if (isRaw) {
+              lastPublishedRaw = item.rawBuf;
+              publishFrame(null, lastPublishedRaw);
             } else {
-              // Worker was delayed past real-time slot: emit duplicate frame immediately so YouTube's RTMP socket receives rock-solid 30.00 CFR
-              if (runtime.encoder?.connectedHint) {
-                runtime.renderer.dropped++;
-              }
-              fpsFrames++;
-              if (isRaw && lastPublishedRaw) {
-                publishFrame(null, lastPublishedRaw);
-              } else if (!isRaw && lastPublishedJpeg) {
-                publishFrame(lastPublishedJpeg);
-              }
-              frameQueue.delete(deliveryIndex);
+              lastPublishedJpeg = item.jpegBuf;
+              publishFrame(item.jpegBuf);
             }
-            deliveryIndex++;
-            dispatchNextIdleWorker();
+            runtime.renderer.frames++;
+            runtime.renderer.lastFrameAt = Date.now();
+            runtime.renderer.lastDrawMs = Math.round(item.renderMs || 0);
+            frameQueue.delete(deliveryIndex);
+          } else {
+            // Only if frame was not ready after 45ms grace do we emit duplicate frame
+            if (runtime.encoder?.connectedHint) {
+              runtime.renderer.dropped++;
+            }
+            fpsFrames++;
+            if (isRaw && lastPublishedRaw) {
+              publishFrame(null, lastPublishedRaw);
+            } else if (!isRaw && lastPublishedJpeg) {
+              publishFrame(lastPublishedJpeg);
+            }
+            frameQueue.delete(deliveryIndex);
           }
+          deliveryIndex++;
+          dispatchNextIdleWorker();
 
           // FPS accounting & periodic logging with CPU core load distribution
           const nowFpsTime = performance.now();
@@ -7700,15 +7706,6 @@ export async function startRenderer() {
               const coreLoadStr = workerStats.map((ws, idx) => `c${idx}:${((ws.frames / totalFramesDone) * 100).toFixed(0)}%`).join(" ");
               console.log(`[renderer] fps=${runtime.renderer.fps.toFixed(1)} draw=${runtime.renderer.lastDrawMs}ms frames=${runtime.renderer.frames} dropped=${runtime.renderer.dropped} | cores[${numWorkers}]: ${coreLoadStr}`);
             }
-          }
-
-          // High-precision hybrid pacer to next frame target time
-          const nextTargetTime = deliveryStart + deliveryIndex * frameInterval;
-          const waitMs = nextTargetTime - performance.now();
-          if (waitMs > 16) {
-            await new Promise(r => setTimeout(r, Math.floor(waitMs - 8)));
-          } else if (waitMs > 0) {
-            await new Promise(r => setImmediate(r));
           }
         }
         resolve();
