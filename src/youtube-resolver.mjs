@@ -4,6 +4,30 @@ import { runtime } from "./runtime.mjs";
 let cachedVideoId = null;
 let lastResolvedAt = 0;
 let resolvePromise = null;
+let apiQuotaExceeded = false;
+
+/**
+ * Scrape channel's live redirect without consuming any Google API quota.
+ */
+export async function resolveLiveVideoIdFromChannel(channelId = config.channelId) {
+  const chId = (channelId || process.env.YOUTUBE_CHANNEL_ID || config.channelId || "").trim();
+  if (!chId) return null;
+  try {
+    const res = await fetch(`https://www.youtube.com/channel/${chId}/live`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
+      }
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const canonicalMatch = html.match(/<link\s+rel="canonical"\s+href="https:\/\/www\.youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})"/i);
+    const videoIdMatch = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
+    const id = canonicalMatch?.[1] || videoIdMatch?.[1];
+    return id || null;
+  } catch {}
+  return null;
+}
 
 /**
  * Calculate title match score between candidate stream title and target title.
@@ -47,7 +71,11 @@ export async function fetchLiveVideoIdFromYouTubeApi({
   const title = (liveTitle || "").trim();
 
   if (!key || !chId) {
-    return null;
+    return resolveLiveVideoIdFromChannel(chId);
+  }
+
+  if (apiQuotaExceeded) {
+    return resolveLiveVideoIdFromChannel(chId);
   }
 
   const searchParams = new URLSearchParams({
@@ -77,7 +105,17 @@ export async function fetchLiveVideoIdFromYouTubeApi({
 
     if (!response.ok) {
       const errText = await response.text();
-      console.warn(`[youtube-resolver] YouTube API search error (${response.status}): ${errText.slice(0, 200)}`);
+      if (response.status === 429 || /quota/i.test(errText)) {
+        apiQuotaExceeded = true;
+        console.warn(`[youtube-resolver] ⚠️ YouTube Data API search quota exceeded (429). Switching to zero-quota channel live scraper...`);
+        const scraped = await resolveLiveVideoIdFromChannel(chId);
+        if (scraped) {
+          console.log(`[youtube-resolver] 🎯 Zero-quota resolver found active live stream: ${scraped}`);
+          return scraped;
+        }
+      } else {
+        console.warn(`[youtube-resolver] YouTube API search error (${response.status}): ${errText.slice(0, 200)}`);
+      }
       return null;
     }
 
@@ -205,6 +243,11 @@ export async function waitForLiveStreamByTitle({
       return matchedId;
     }
 
+    if (apiQuotaExceeded) {
+      console.log(`[youtube-resolver] ⚠️ YouTube API quota exceeded; proceeding immediately with resolved or fallback ID.`);
+      break;
+    }
+
     if (elapsedSec >= timeoutSeconds) {
       console.warn(`[youtube-resolver] ⚠️ Timeout (${timeoutSeconds}s) reached waiting for live stream matching "${targetTitle}".`);
       break;
@@ -218,11 +261,17 @@ export async function waitForLiveStreamByTitle({
     }
   }
 
-  // Fallback if timeout reached
-  const fallbackDiscovered = await fetchLiveVideoIdFromYouTubeApi({
-    liveTitle: targetTitle,
-    requireTitleMatch: false
-  });
+  // Fallback if timeout or quota limit reached
+  let fallbackDiscovered = null;
+  if (!apiQuotaExceeded) {
+    fallbackDiscovered = await fetchLiveVideoIdFromYouTubeApi({
+      liveTitle: targetTitle,
+      requireTitleMatch: false
+    });
+  }
+  if (!fallbackDiscovered) {
+    fallbackDiscovered = await resolveLiveVideoIdFromChannel();
+  }
 
   const finalVideoId = fallbackDiscovered || fallbackId;
   if (finalVideoId) {
