@@ -7540,10 +7540,11 @@ export async function startRenderer() {
     ];
 
     const frameInterval = 1000 / config.renderFps;
-    const PIPELINE_DEPTH = Math.max(6, numWorkers * 3);
+    const PIPELINE_DEPTH = Math.max(8, numWorkers * 3);
     const frameQueue = new Map();
     const streamStartTime = Date.now();
-    const workerBusy = new Array(numWorkers).fill(false);
+    const workerInFlight = new Array(numWorkers).fill(0);
+    const MAX_IN_FLIGHT_PER_WORKER = 2;
     const workerSlots = new Array(numWorkers).fill(0);
     const workerStats = Array.from({ length: numWorkers }, () => ({ frames: 0, totalMs: 0 }));
     let nextDispatchIndex = 0;
@@ -7551,11 +7552,11 @@ export async function startRenderer() {
     let workerDispatchCursor = 0;
 
     function dispatchToWorker(workerId) {
-      if (!running || workerBusy[workerId]) return;
+      if (!running || workerInFlight[workerId] >= MAX_IN_FLIGHT_PER_WORKER) return;
       const frameIndex = nextDispatchIndex++;
       const slot = workerSlots[workerId];
       workerSlots[workerId] = (slot + 1) % SLOTS_PER_WORKER;
-      workerBusy[workerId] = true;
+      workerInFlight[workerId]++;
       frameQueue.set(frameIndex, { workerId, slot, ready: false });
 
       const targetFrameTime = streamStartTime + Math.round(frameIndex * frameInterval);
@@ -7578,7 +7579,7 @@ export async function startRenderer() {
         let dispatched = false;
         for (let step = 0; step < numWorkers; step++) {
           const w = (workerDispatchCursor + step) % numWorkers;
-          if (!workerBusy[w]) {
+          if (workerInFlight[w] < MAX_IN_FLIGHT_PER_WORKER) {
             workerDispatchCursor = (w + 1) % numWorkers;
             dispatchToWorker(w);
             dispatched = true;
@@ -7592,7 +7593,7 @@ export async function startRenderer() {
     for (let i = 0; i < numWorkers; i++) {
       activeWorkers[i].on("message", (msg) => {
         if (msg.type === "frame_done") {
-          workerBusy[msg.workerId] = false;
+          workerInFlight[msg.workerId] = Math.max(0, workerInFlight[msg.workerId] - 1);
           workerStats[msg.workerId].frames++;
           workerStats[msg.workerId].totalMs += (msg.renderMs || 0);
 
@@ -7638,14 +7639,19 @@ export async function startRenderer() {
         while (running) {
           const now = performance.now();
           const elapsedSec = (now - deliveryStart) / 1000;
-          // Exact number of frames that should have been delivered by this exact moment in wall-clock time
-          const targetIndex = Math.floor(elapsedSec * config.renderFps);
+          let targetIndex = Math.floor(elapsedSec * config.renderFps);
+
+          // If main-thread I/O paused the event loop by more than 2 frames, realign deliveryStart so we don't burst-drop frames
+          if (targetIndex > deliveryIndex + 2) {
+            deliveryStart = performance.now() - (deliveryIndex * frameInterval);
+            targetIndex = deliveryIndex;
+          }
 
           // Deliver all frames due up to targetIndex so video never drifts or falls behind real-time
           while (deliveryIndex <= targetIndex && running) {
-            // If on time for the current frame, give the worker up to 14ms grace to finish
-            if (deliveryIndex === targetIndex && !frameQueue.get(deliveryIndex)?.ready) {
-              const graceEnd = performance.now() + 14;
+            // Give worker up to 16ms grace to finish this exact delivery slot
+            if (!frameQueue.get(deliveryIndex)?.ready) {
+              const graceEnd = performance.now() + 16;
               while (!frameQueue.get(deliveryIndex)?.ready && performance.now() < graceEnd && running) {
                 await new Promise(r => setImmediate(r));
               }
