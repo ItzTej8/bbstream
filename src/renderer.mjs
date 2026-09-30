@@ -7616,8 +7616,8 @@ export async function startRenderer() {
     dispatchNextIdleWorker();
 
     return await new Promise(async resolve => {
-      // 1. Warm-up prefill: buffer 5-6 frames ahead so heavy animations never starve the delivery loop
-      const prefillTarget = Math.max(4, Math.min(8, numWorkers * 2));
+      // 1. Warm-up prefill: buffer 6-8 frames ahead so heavy animations never starve the delivery loop
+      const prefillTarget = Math.max(6, Math.min(10, numWorkers * 2));
       const prefillTimeout = performance.now() + 5000;
       while (running && performance.now() < prefillTimeout) {
         let readyCount = 0;
@@ -7643,9 +7643,9 @@ export async function startRenderer() {
 
           // Deliver all frames due up to targetIndex so video never drifts or falls behind real-time
           while (deliveryIndex <= targetIndex && running) {
-            // If on time for the current frame, give the worker up to 10ms grace to finish
+            // If on time for the current frame, give the worker up to 14ms grace to finish
             if (deliveryIndex === targetIndex && !frameQueue.get(deliveryIndex)?.ready) {
-              const graceEnd = performance.now() + 10;
+              const graceEnd = performance.now() + 14;
               while (!frameQueue.get(deliveryIndex)?.ready && performance.now() < graceEnd && running) {
                 await new Promise(r => setImmediate(r));
               }
