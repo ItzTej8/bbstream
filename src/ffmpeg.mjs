@@ -109,7 +109,7 @@ export function createEncoder() {
       "-minrate", `${br}k`,
       "-maxrate", `${br}k`,
       "-bufsize", `${br * 2}k`,
-      "-x264-params", "nal-hrd=cbr:force-cfr=1:sync-lookahead=2:rc-lookahead=10",
+      "-x264-params", "nal-hrd=cbr:force-cfr=1:sync-lookahead=0:rc-lookahead=0",
       "-profile:v", "main",
       "-g", String(config.fps * config.gopSeconds),
       "-keyint_min", String(config.fps * config.gopSeconds),
@@ -124,7 +124,7 @@ export function createEncoder() {
     "-max_muxing_queue_size", "8192",
     "-flvflags", "no_duration_filesize",
     "-rtmp_live", "live",
-    "-rtmp_buffer", "4000",
+    "-rtmp_buffer", "1000",
     "-f", "flv", out,
   );
 

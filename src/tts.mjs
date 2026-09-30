@@ -4,7 +4,9 @@ import { config } from "./config.mjs";
 
 let lastSpeechAt = 0;
 let isEnabled = config.ttsEnabled;
-let currentVoice = process.env.TTS_VOICE || config.ttsVoice || "en-IN-NeerjaNeural";
+let currentLanguage = (process.env.TTS_LANG || "en").toLowerCase() === "hi" ? "hi" : "en";
+let currentMode = Number(process.env.TTS_MODE) === 2 ? 2 : 1;
+let currentVoice = process.env.TTS_VOICE || config.ttsVoice || (currentLanguage === "hi" ? "hi-IN-SwaraNeural" : "en-IN-NeerjaNeural");
 
 let targetContestants = new Set(
   (config.ttsSpecificContestants || [])
@@ -31,10 +33,71 @@ export function isTtsEnabled() {
   return isEnabled;
 }
 
+export function setTtsLanguage(lang) {
+  const l = String(lang || "").toLowerCase().trim();
+  if (l === "hi" || l === "hindi") {
+    currentLanguage = "hi";
+    if (currentVoice.startsWith("en-")) {
+      currentVoice = (currentVoice.includes("Prabhat") || currentVoice.includes("male") || currentVoice.includes("boy"))
+        ? "hi-IN-MadhurNeural"
+        : "hi-IN-SwaraNeural";
+    }
+  } else {
+    currentLanguage = "en";
+    if (currentVoice.startsWith("hi-")) {
+      currentVoice = (currentVoice.includes("Madhur") || currentVoice.includes("male") || currentVoice.includes("boy"))
+        ? "en-IN-PrabhatNeural"
+        : "en-IN-NeerjaNeural";
+    }
+  }
+  console.log(`[tts] 🌐 Announcer language set to: ${currentLanguage.toUpperCase()} (Voice: ${currentVoice})`);
+  return { language: currentLanguage, voice: currentVoice };
+}
+
+export function getTtsLanguage() {
+  return currentLanguage;
+}
+
+export function setTtsMode(mode) {
+  const mStr = String(mode || "").toLowerCase().trim();
+  if (mStr === "2" || mStr.includes("total") || mStr.includes("vote") || mStr.includes("count")) {
+    currentMode = 2;
+  } else {
+    currentMode = 1;
+  }
+  console.log(`[tts] 📋 Announcer mode set to: Mode ${currentMode} (${currentMode === 2 ? "With Total Votes" : "Simple"})`);
+  return currentMode;
+}
+
+export function getTtsMode() {
+  return currentMode;
+}
+
 export function setTtsVoice(voice) {
   if (voice && typeof voice === "string") {
-    currentVoice = voice.trim();
-    console.log(`[tts] 🎙️ Announcer voice set to: "${currentVoice}"`);
+    const vLower = voice.toLowerCase().trim();
+    if (vLower === "girl" || vLower === "female") {
+      currentVoice = currentLanguage === "hi" ? "hi-IN-SwaraNeural" : "en-IN-NeerjaNeural";
+    } else if (vLower === "boy" || vLower === "male") {
+      currentVoice = currentLanguage === "hi" ? "hi-IN-MadhurNeural" : "en-IN-PrabhatNeural";
+    } else if (vLower === "swara" || vLower.includes("hi-in-swara")) {
+      currentVoice = "hi-IN-SwaraNeural";
+      currentLanguage = "hi";
+    } else if (vLower === "madhur" || vLower.includes("hi-in-madhur")) {
+      currentVoice = "hi-IN-MadhurNeural";
+      currentLanguage = "hi";
+    } else if (vLower === "neerja" || vLower.includes("en-in-neerja")) {
+      currentVoice = "en-IN-NeerjaNeural";
+      currentLanguage = "en";
+    } else if (vLower === "prabhat" || vLower.includes("en-in-prabhat")) {
+      currentVoice = "en-IN-PrabhatNeural";
+      currentLanguage = "en";
+    } else {
+      currentVoice = voice.trim();
+      if (currentVoice.startsWith("hi-")) currentLanguage = "hi";
+      else if (currentVoice.startsWith("en-")) currentLanguage = "en";
+    }
+    console.log(`[tts] 🎙️ Announcer voice set to: "${currentVoice}" (${currentLanguage.toUpperCase()})`);
     return currentVoice;
   }
   return currentVoice;
@@ -120,7 +183,7 @@ function ensureWorker() {
   }
 }
 
-export function queueVoteSpeech({ voter, contestantNo, candidateName, count = 1 }) {
+export function queueVoteSpeech({ voter, contestantNo, candidateName, count = 1, totalVotes = 0 }) {
   if (!isEnabled) return false;
 
   const now = Date.now();
@@ -146,10 +209,35 @@ export function queueVoteSpeech({ voter, contestantNo, candidateName, count = 1 
   const cleanCand = String(candidateName || `#${contestantNo}`).trim();
 
   let phrase = "";
-  if (count > 1) {
-    phrase = `${cleanName} has added ${count} votes for ${cleanCand}`;
+  if (currentLanguage === "hi") {
+    if (currentMode === 2 && totalVotes > 0) {
+      if (count > 1) {
+        phrase = `${cleanName} ne ${cleanCand} ke liye ${count} votes add kiye hain, aur kul votes ${totalVotes} hain`;
+      } else {
+        phrase = `${cleanName} ne ${cleanCand} ko vote diya hai, aur kul votes ${totalVotes} hain`;
+      }
+    } else {
+      if (count > 1) {
+        phrase = `${cleanName} ne ${cleanCand} ke liye ${count} votes add kiye hain`;
+      } else {
+        phrase = `${cleanName} ne ${cleanCand} ko vote diya hai`;
+      }
+    }
   } else {
-    phrase = `${cleanName} has voted for ${cleanCand}`;
+    // English (default)
+    if (currentMode === 2 && totalVotes > 0) {
+      if (count > 1) {
+        phrase = `${cleanName} has added ${count} votes for ${cleanCand}, and total votes are ${totalVotes}`;
+      } else {
+        phrase = `${cleanName} has voted for ${cleanCand}, and total votes are ${totalVotes}`;
+      }
+    } else {
+      if (count > 1) {
+        phrase = `${cleanName} has added ${count} votes for ${cleanCand}`;
+      } else {
+        phrase = `${cleanName} has voted for ${cleanCand}`;
+      }
+    }
   }
 
   lastSpeechAt = now;

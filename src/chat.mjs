@@ -9,7 +9,7 @@ import {
   setContestantBuff, startQuiz, answerQuiz
 } from "./interactive.mjs";
 import { setBgMusicVolume, getBgMusicVolume, setMusicTrack, nextMusicTrack, prevMusicTrack, setTrackLoopMode, getTrackLoopMode, getMusicTrackInfo, MUSIC_TRACKS } from "./frame-server.mjs";
-import { setTtsEnabled, isTtsEnabled, setTtsVoice, getTtsVoice, setTtsTargetContestant, getTtsFilterStatus } from "./tts.mjs";
+import { setTtsEnabled, isTtsEnabled, setTtsVoice, getTtsVoice, setTtsTargetContestant, getTtsFilterStatus, setTtsLanguage, getTtsLanguage, setTtsMode, getTtsMode } from "./tts.mjs";
 import { fetchLiveSocialCounts } from "./likes-monitor.mjs";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -1207,11 +1207,12 @@ export function startChatLoop({ signal }) {
                   setAnnouncement(`🔮 PREDICTION: Type !predict <contestant> to lock in your Bigg Boss Winner pick!`, "PREDICTION HELP", 3500);
                 }
               }
-              // --- Spoken Neural TTS Audio Announcer Controls: !announce on/off, !tts on/off ---
+              // --- Spoken Neural TTS Audio Announcer Controls: !announce on/off, !announce lang, !announce mode, !tts ---
               else if (cmdToken === "tts" || cmdToken === "voice" || cmdToken === "announce" || cmdToken === "announcer") {
                 const isOwnerOrAdmin = admin(id, owner, mod);
                 const ttsArg = (parts[1] || "").toLowerCase();
                 const ttsRest = parts.slice(2).join(" ").trim();
+                const restLower = ttsRest.toLowerCase();
 
                 if (ttsArg === "on" || ttsArg === "enable" || ttsArg === "start" || ttsArg === "play") {
                   if (isOwnerOrAdmin) {
@@ -1225,27 +1226,44 @@ export function startChatLoop({ signal }) {
                     setAnnouncement(`🔇 Live Voice Announcer TURNED OFF by ${author}!`, "VOICE ANNOUNCER", 3500);
                     console.log(`[tts] ${author} disabled live voice announcements`);
                   }
+                } else if (ttsArg === "lang" || ttsArg === "language" || ttsArg === "hindi" || ttsArg === "english") {
+                  if (isOwnerOrAdmin) {
+                    const targetLang = (ttsArg === "hindi" || restLower.includes("hi") || restLower.includes("hindi")) ? "hi" : "en";
+                    const res = setTtsLanguage(targetLang);
+                    const langName = res.language === "hi" ? "HINDI (हिन्दी)" : "ENGLISH";
+                    setAnnouncement(`🌐 Announcer Language set to: ${langName} by ${author}! Voice: ${res.voice}`, "ANNOUNCER LANGUAGE", 4000);
+                  } else {
+                    const curL = getTtsLanguage() === "hi" ? "HINDI (हिन्दी)" : "ENGLISH";
+                    setAnnouncement(`🌐 Announcer Language: ${curL} • Type !announce lang hindi OR !announce lang english`, "ANNOUNCER LANGUAGE", 4500);
+                  }
+                } else if (ttsArg === "mode" || ttsArg === "format" || ttsArg === "type") {
+                  if (isOwnerOrAdmin) {
+                    const mVal = (restLower.includes("2") || restLower.includes("total") || restLower.includes("vote") || restLower.includes("count")) ? 2 : 1;
+                    setTtsMode(mVal);
+                    if (mVal === 2) {
+                      setAnnouncement(`📋 Announcer Mode: Mode 2 (With Total Votes) by ${author}! Example: "Xloss has voted for Contestant and total votes are 150"`, "ANNOUNCER MODE", 4500);
+                    } else {
+                      setAnnouncement(`📋 Announcer Mode: Mode 1 (Simple) by ${author}! Example: "Xloss has voted for Contestant"`, "ANNOUNCER MODE", 4500);
+                    }
+                  } else {
+                    const curM = getTtsMode();
+                    setAnnouncement(`📋 Announcer Mode: Mode ${curM} (${curM === 2 ? "With Total Votes" : "Simple"}) • Use !announce mode 1 / !announce mode 2`, "ANNOUNCER MODE", 4500);
+                  }
                 } else if (ttsArg === "voice" || ttsArg === "speaker") {
                   if (isOwnerOrAdmin && ttsRest) {
-                    let vName = ttsRest;
-                    const vLower = ttsRest.toLowerCase();
-                    if (vLower.includes("neerja") || vLower.includes("girl") || vLower.includes("female")) vName = "en-IN-NeerjaNeural";
-                    else if (vLower.includes("prabhat") || vLower.includes("boy") || vLower.includes("male")) vName = "en-IN-PrabhatNeural";
-                    else if (vLower.includes("swara") || vLower.includes("hindi")) vName = "hi-IN-SwaraNeural";
-                    else if (vLower.includes("jenny")) vName = "en-US-JennyNeural";
-                    else if (vLower.includes("chris") || vLower.includes("christopher")) vName = "en-US-ChristopherNeural";
-                    else if (vLower.includes("guy")) vName = "en-US-GuyNeural";
-                    setTtsVoice(vName);
+                    const vName = setTtsVoice(ttsRest);
                     setAnnouncement(`🎙️ Announcer voice set to: ${vName}`, "VOICE CHANGED", 3500);
                   } else {
                     const cur = getTtsVoice();
-                    setAnnouncement(`🎙️ Announcer voice: ${cur} • Try: girl, boy, neerja, prabhat, swara`, "ANNOUNCER VOICE", 4500);
+                    setAnnouncement(`🎙️ Announcer voice: ${cur} • Try: girl, boy, neerja, swara, prabhat, madhur`, "ANNOUNCER VOICE", 4500);
                   }
                 } else if (ttsArg === "status" || (!ttsArg && (cmdToken === "announce" || cmdToken === "announcer"))) {
-                  const st = isTtsEnabled() ? "ENABLED (ON)" : "DISABLED (OFF)";
+                  const st = isTtsEnabled() ? "ON" : "OFF";
+                  const lang = getTtsLanguage().toUpperCase();
+                  const mode = getTtsMode();
                   const filt = getTtsFilterStatus();
                   const curV = getTtsVoice();
-                  setAnnouncement(`🗣️ Announcer: ${st} • Voice: ${curV} • Filter: ${filt} • Use !announce on / !announce off`, "ANNOUNCER STATUS", 4000);
+                  setAnnouncement(`🗣️ Announcer: ${st} • Lang: ${lang} • Mode: ${mode} (${mode === 2 ? "With Total Votes" : "Simple"}) • Voice: ${curV} • Filter: ${filt}`, "ANNOUNCER STATUS", 5000);
                 } else if (ttsArg === "all" || ttsArg === "reset" || ttsArg === "clear") {
                   if (isOwnerOrAdmin) {
                     setTtsTargetContestant("all");
@@ -1261,9 +1279,10 @@ export function startChatLoop({ signal }) {
                     setAnnouncement(`🗣️ Voice will announce votes ONLY for #${cTarget} ${cName}!`, "TTS FILTER", 4500);
                   } else {
                     const st = isTtsEnabled() ? "ON" : "OFF";
-                    const filt = getTtsFilterStatus();
                     const curV = getTtsVoice();
-                    setAnnouncement(`🗣️ Announcer (${st}, ${curV}): Use !announce on/off • !announce voice <name> • !tts <contestant>`, "ANNOUNCER INFO", 4000);
+                    const lang = getTtsLanguage().toUpperCase();
+                    const mode = getTtsMode();
+                    setAnnouncement(`🗣️ Announcer (${st}, ${lang}, M${mode}): !announce on/off • !announce lang <en|hi> • !announce mode <1|2> • !announce voice <name>`, "ANNOUNCER INFO", 4500);
                   }
                 }
               }

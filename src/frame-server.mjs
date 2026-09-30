@@ -764,11 +764,13 @@ on("vote", (vote) => {
   const cNo = Number(vote?.contestant || 1);
   const cItem = config.contestants.find(c => c.no === cNo);
   const cName = cItem?.displayName || cItem?.name || `#${cNo}`;
+  const totalVotes = vote?.totalVotes || state.contestants[cNo]?.votes || 0;
   void queueVoteSpeech({
     voter: vote?.name || "Viewer",
     contestantNo: cNo,
     candidateName: cName,
-    count: vote?.count || 1
+    count: vote?.count || 1,
+    totalVotes
   });
 });
 
@@ -1026,6 +1028,7 @@ export function startFrameServer() {
       const client = { res, req, closed: false };
       res.setTimeout(0);
       req.setTimeout(0);
+      try { res.socket?.setNoDelay(true); } catch {}
       rawClients.add(client);
       runtime.encoder.inputClients = clients.size + rawClients.size;
       console.log(`[raw] client connected (total raw: ${rawClients.size})`);
@@ -1121,8 +1124,8 @@ export function publishFrame(frame, rawBuf = null) {
   if (rawBuf && rawClients.size > 0) {
     for (const client of [...rawClients]) {
       if (client.closed || !client.res.writable) continue;
-      // Allow up to 160MB TCP buffer (~43 raw frames) so encoding keyframe bursts or CPU load spikes never drop frames
-      if (client.res.writableLength > 160_000_000) {
+      // Allow up to 256MB TCP buffer (~70 raw frames / 2.3 seconds) so encoding keyframe bursts or CPU load spikes never drop frames
+      if (client.res.writableLength > 256_000_000) {
         if (runtime.encoder?.connectedHint) {
           runtime.renderer.dropped++;
         }
