@@ -56,6 +56,7 @@ export const config=Object.freeze({
   timeLeftText:String(process.env.TIME_LEFT_TEXT||"2D 5H 45M").trim()||"2D 5H 45M",
   nowPlayingText:String(process.env.NOW_PLAYING_TEXT||"Bigg Boss Theme Song").trim()||"Bigg Boss Theme Song",
   ttsEnabled:bool("TTS_ENABLED",true),
+  ttsVoice:String(process.env.TTS_VOICE||"en-IN-NeerjaNeural").trim(),
   ttsMinIntervalMs:Math.max(1000,Math.floor(num("TTS_MIN_INTERVAL_MS",3500))),
   ttsSpecificContestants:csv("TTS_SPECIFIC_CONTESTANTS"),
   ttsVolume:Math.max(0.1,Math.min(2.0,num("TTS_VOLUME",1.0))),

@@ -4,7 +4,7 @@ import { config } from "./config.mjs";
 
 let lastSpeechAt = 0;
 let isEnabled = config.ttsEnabled;
-let currentVoice = process.env.TTS_VOICE || "en-IN-PrabhatNeural";
+let currentVoice = process.env.TTS_VOICE || config.ttsVoice || "en-IN-NeerjaNeural";
 
 let targetContestants = new Set(
   (config.ttsSpecificContestants || [])

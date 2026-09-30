@@ -1204,15 +1204,17 @@ export function startChatLoop({ signal }) {
                   if (isOwnerOrAdmin && ttsRest) {
                     let vName = ttsRest;
                     const vLower = ttsRest.toLowerCase();
-                    if (vLower.includes("prabhat")) vName = "en-IN-PrabhatNeural";
-                    else if (vLower.includes("neerja")) vName = "en-IN-NeerjaExpressiveNeural";
+                    if (vLower.includes("neerja") || vLower.includes("girl") || vLower.includes("female")) vName = "en-IN-NeerjaNeural";
+                    else if (vLower.includes("prabhat") || vLower.includes("boy") || vLower.includes("male")) vName = "en-IN-PrabhatNeural";
+                    else if (vLower.includes("swara") || vLower.includes("hindi")) vName = "hi-IN-SwaraNeural";
+                    else if (vLower.includes("jenny")) vName = "en-US-JennyNeural";
                     else if (vLower.includes("chris") || vLower.includes("christopher")) vName = "en-US-ChristopherNeural";
                     else if (vLower.includes("guy")) vName = "en-US-GuyNeural";
                     setTtsVoice(vName);
                     setAnnouncement(`🎙️ Announcer voice set to: ${vName}`, "VOICE CHANGED", 3500);
                   } else {
                     const cur = getTtsVoice();
-                    setAnnouncement(`🎙️ Announcer voice: ${cur} • Available: prabhat, neerja, chris, guy`, "ANNOUNCER VOICE", 4500);
+                    setAnnouncement(`🎙️ Announcer voice: ${cur} • Try: girl, boy, neerja, prabhat, swara`, "ANNOUNCER VOICE", 4500);
                   }
                 } else if (ttsArg === "status" || (!ttsArg && (cmdToken === "announce" || cmdToken === "announcer"))) {
                   const st = isTtsEnabled() ? "ENABLED (ON)" : "DISABLED (OFF)";

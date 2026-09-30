@@ -450,6 +450,65 @@ for (let i = 0; i < clashSamples; i++) {
   clashPcm[i * 2 + 1] = Math.round(s * 25000);
 }
 
+// Pre-synthesize Broadcast Announcer Music Bed (4.5s cool background music effect)
+// Features:
+// - Sparkling crystalline chime flourish (t=0 to 0.75s)
+// - Warm rhythmic sub-bass pulse (warm analog 808 style)
+// - Lush Cmaj9 stereo chord pads (C4, G4, B4, D5, E5) with spatial width
+// - Smooth studio swell and cinematic tail fade-out
+const ANNOUNCE_BED_DUR = 4.5;
+const announceBedSamples = Math.floor(AUDIO_SAMPLE_RATE * ANNOUNCE_BED_DUR);
+const broadcastAnnounceBedPcm = new Int16Array(announceBedSamples * 2);
+for (let i = 0; i < announceBedSamples; i++) {
+  const t = i / AUDIO_SAMPLE_RATE;
+  // Fade in over 0.20s, hold until 3.4s, smooth fade out to 4.5s
+  let env = 1.0;
+  if (t < 0.20) {
+    env = t / 0.20;
+  } else if (t > 3.4) {
+    env = Math.max(0, (4.5 - t) / 1.1);
+  }
+
+  // 1. Warm sub bass pulse (62Hz fundamental with soft 2nd harmonic)
+  const pulseRate = 1.25; // rhythmic pulse every 0.8s
+  const pulsePhase = (t % (1 / pulseRate)) * pulseRate;
+  const bassEnv = Math.exp(-pulsePhase * 3.2);
+  const bass = (Math.sin(2 * Math.PI * 62 * t) * 0.45 + Math.sin(2 * Math.PI * 124 * t) * 0.18) * bassEnv;
+
+  // 2. Lush Cmaj9 stereo chord pads:
+  // C4 (261.63), G4 (392.00), B4 (493.88), D5 (587.33), E5 (659.25)
+  const padL = (
+    Math.sin(2 * Math.PI * 261.63 * t) * 0.18 +
+    Math.sin(2 * Math.PI * 392.00 * t + 0.3) * 0.16 +
+    Math.sin(2 * Math.PI * 587.33 * t + 0.6) * 0.12
+  );
+  const padR = (
+    Math.sin(2 * Math.PI * 261.63 * t + 0.5) * 0.18 +
+    Math.sin(2 * Math.PI * 493.88 * t + 0.2) * 0.15 +
+    Math.sin(2 * Math.PI * 659.25 * t + 0.7) * 0.13
+  );
+
+  // 3. Opening crystalline shimmer at t=0 to 0.75s
+  let shimmerL = 0, shimmerR = 0;
+  if (t < 0.75) {
+    const sEnv = Math.exp(-t * 3.8);
+    shimmerL = (Math.sin(2 * Math.PI * 1568 * t) * 0.18 + Math.sin(2 * Math.PI * 2637 * t) * 0.12) * sEnv;
+    shimmerR = (Math.sin(2 * Math.PI * 2093 * t) * 0.18 + Math.sin(2 * Math.PI * 3136 * t) * 0.12) * sEnv;
+  }
+
+  // 4. Subtle airy stereo sweep
+  const sweepL = Math.sin(2 * Math.PI * (880 + Math.sin(t * 1.8) * 350) * t) * 0.04;
+  const sweepR = Math.sin(2 * Math.PI * (880 + Math.cos(t * 1.8) * 350) * t) * 0.04;
+
+  const totalL = (bass * 0.55 + padL + shimmerL + sweepL) * env;
+  const totalR = (bass * 0.55 + padR + shimmerR + sweepR) * env;
+
+  broadcastAnnounceBedPcm[i * 2] = Math.max(-32767, Math.min(32767, Math.round(totalL * 22000)));
+  broadcastAnnounceBedPcm[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(totalR * 22000)));
+}
+
+let ttsActiveUntil = 0;
+
 import { MUSIC_TRACKS, getTrackPcm, loadCustomMusicFiles } from "./music-tracks.mjs";
 export { MUSIC_TRACKS, loadCustomMusicFiles };
 
@@ -685,9 +744,18 @@ function queueSfx(fn) {
 }
 
 registerTtsAudioPlayer((pcm, volume = 1.0) => {
-  if (!isMusicEnabled()) return;
-  activeSounds.push({ pcm, offset: 0, volume });
-  if (activeSounds.length > 10) activeSounds.shift();
+  const durSec = (pcm.length / 2) / AUDIO_SAMPLE_RATE;
+  ttsActiveUntil = Date.now() + Math.max(3800, Math.round(durSec * 1000) + 400);
+
+  // 1. Play cool background music effect bed under the announcement
+  if (isMusicEnabled()) {
+    activeSounds.push({ pcm: broadcastAnnounceBedPcm, offset: 0, volume: 0.50 });
+  }
+
+  // 2. Play the female announcer voice loud and clear
+  activeSounds.push({ pcm, offset: 0, volume: Math.min(1.8, volume * 1.35) });
+
+  if (activeSounds.length > 12) activeSounds.shift();
 });
 
 // Auto-trigger sound whenever a vote is accepted in the system
@@ -798,14 +866,16 @@ function sendAudioFrame(forcedSamples = 0) {
   const curTrack = MUSIC_TRACKS[currentTrackIndex] || MUSIC_TRACKS[0];
   const curPcm = curTrack ? getTrackPcm(curTrack) : null;
   const trackSamples = curPcm ? ((curPcm.length / 2) | 0) : 0;
+  const isTtsDucking = Date.now() < ttsActiveUntil;
+  const curBgVol = isTtsDucking ? (bgMusicVolume * 0.22) : bgMusicVolume;
 
   for (let i = 0; i < neededSamples; i++) {
     let sumL = 0, sumR = 0;
 
-    // Ambient TV studio music bed (at dynamic bgMusicVolume)
+    // Ambient TV studio music bed (smoothly ducked to 22% during voice announcement)
     if (musicOn && curPcm && trackSamples > 0) {
-      sumL += curPcm[bgLoopSampleIndex * 2] * bgMusicVolume;
-      sumR += curPcm[bgLoopSampleIndex * 2 + 1] * bgMusicVolume;
+      sumL += curPcm[bgLoopSampleIndex * 2] * curBgVol;
+      sumR += curPcm[bgLoopSampleIndex * 2 + 1] * curBgVol;
       bgLoopSampleIndex = (bgLoopSampleIndex + 1) % trackSamples;
     }
 
