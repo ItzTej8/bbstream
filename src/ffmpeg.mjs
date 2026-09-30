@@ -91,6 +91,7 @@ export function createEncoder() {
       "-g", String(config.fps * config.gopSeconds),
       "-pix_fmt", "yuv420p",
     );
+  } else {
     const detectedCpus = os.cpus()?.length || 2;
     // On low-end Linux VPS, allow x264 to utilize multi-threaded slice encoding with fast lookahead
     const x264Threads = config.encoderThreads > 0

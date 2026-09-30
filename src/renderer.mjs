@@ -3620,10 +3620,13 @@ function drawInteractive(targetCtx, p, now) {
   const events = getEvents(now), s = interactiveState();
   if (s.particles.length > 0) {
     s.particles = s.particles.filter(q => (now - (q.born || now)) <= q.max);
-    if (s.particles.length > 120) s.particles = s.particles.slice(-120);
+    if (s.particles.length > 60) s.particles = s.particles.slice(-60);
   }
 
-  for (const e of events) {
+  // Performance guardrail: render at most the 3 freshest active visual effects simultaneously
+  // so visual quality is stunning without stacking 10+ fullscreen particle loops and blowing draw time past 33ms!
+  const activeEvents = events.length > 3 ? events.slice(-3) : events;
+  for (const e of activeEvents) {
     seedParticles(e, now);
     const age = now - e.createdAt, t = clamp(age / e.durationMs, 0, 1);
     if (e.type === "drop") {

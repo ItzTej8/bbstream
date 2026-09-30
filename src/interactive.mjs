@@ -2,8 +2,8 @@ import { emit } from './events.mjs';
 import { runtime } from './runtime.mjs';
 import { config } from './config.mjs';
 
-const MAX_EVENTS = 120;
-const MAX_PARTICLES = 450;
+const MAX_EVENTS = 20;
+const MAX_PARTICLES = 120;
 const USER_WINDOW_MS = 10000;
 const USER_MAX_EVENTS = 30;
 const GLOBAL_WINDOW_MS = 1000;
