@@ -14,8 +14,11 @@ await initRenderer();
 
 // Warm Skia canvas, fonts, shaders & layout on this worker's core
 try {
-  drawMainFrame(Date.now());
-  if (!isRaw) await canvas.encode("jpeg", jpegQuality || 75);
+  for (let w = 0; w < 3; w++) {
+    drawMainFrame(Date.now() + w * 50);
+    if (!isRaw) await canvas.encode("jpeg", jpegQuality || 75);
+    else canvas.data();
+  }
 } catch (e) {
   console.error(`[worker-${workerId}] warm-up error:`, e);
 }

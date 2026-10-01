@@ -1,1 +1,17 @@
-import { Database } from "bun:sqlite";import { resolve } from "node:path";import { config } from "./config.mjs";export function analytics(){const d=new Database(resolve(config.dbFile),{readonly:true});const by=d.query("SELECT contestant_no contestant,COUNT(*) votes FROM votes GROUP BY contestant_no ORDER BY votes DESC").all();const last24h=d.query("SELECT COUNT(*) votes FROM votes WHERE created_at>=?").get(Date.now()-86400000).votes;const hourly=d.query("SELECT strftime('%H',created_at/1000,'unixepoch','localtime') hour,COUNT(*) votes FROM votes WHERE created_at>=? GROUP BY hour ORDER BY hour").all(Date.now()-86400000);d.close();return{totalVotes:by.reduce((a,x)=>a+x.votes,0),byContestant:by,last24h,hourly};}
+import { state, stats } from "./state.mjs";
+
+export function analytics() {
+  const ranking = stats();
+  const by = ranking.map(c => ({
+    contestant: c.no,
+    name: c.displayName || c.name,
+    votes: c.votes
+  }));
+  return {
+    totalVotes: state.totalAcceptedVotes,
+    uniqueVoters: state.uniqueVoters,
+    byContestant: by,
+    last24h: state.totalAcceptedVotes,
+    hourly: []
+  };
+}

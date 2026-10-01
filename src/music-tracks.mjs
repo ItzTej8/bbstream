@@ -1,24 +1,20 @@
 import { spawn } from "node:child_process";
 import { readdir, stat } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, basename, extname, resolve } from "node:path";
 import { isMainThread, Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
 export const AUDIO_SAMPLE_RATE = 44100;
 
-function sine(freq, t) {
-  return Math.sin(2 * Math.PI * freq * t);
-}
-
 function softClip(x) {
   return x > 1 ? 1 : x < -1 ? -1 : x;
 }
 
 // -------------------------------------------------------------------------
-// Pre-rendered Warm & Punchy Lo-Fi Percussion Elements
+// Pre-rendered Warm & Soft Sleep Lo-Fi Percussion Elements
 // -------------------------------------------------------------------------
-function createKickSample(dur = 0.22, startFreq = 95, endFreq = 40, decay = 18) {
+function createKickSample(dur = 0.22, startFreq = 75, endFreq = 38, decay = 14) {
   const len = Math.floor(AUDIO_SAMPLE_RATE * dur);
   const buf = new Float32Array(len);
   for (let i = 0; i < len; i++) {
@@ -29,55 +25,55 @@ function createKickSample(dur = 0.22, startFreq = 95, endFreq = 40, decay = 18) 
   return buf;
 }
 
-function createSnareSample(dur = 0.20, toneFreq = 240, decay = 24) {
+function createSnareSample(dur = 0.20, toneFreq = 190, decay = 20) {
   const len = Math.floor(AUDIO_SAMPLE_RATE * dur);
   const buf = new Float32Array(len);
   for (let i = 0; i < len; i++) {
     const t = i / AUDIO_SAMPLE_RATE;
-    const noise = (Math.random() * 2 - 1) * 0.22;
-    const tone = Math.sin(2 * Math.PI * toneFreq * t) * 0.18;
+    const noise = (Math.random() * 2 - 1) * 0.16;
+    const tone = Math.sin(2 * Math.PI * toneFreq * t) * 0.12;
     buf[i] = (noise + tone) * Math.exp(-t * decay);
   }
   return buf;
 }
 
-function createRimshotSample(dur = 0.12, decay = 38) {
+function createRimshotSample(dur = 0.10, decay = 40) {
   const len = Math.floor(AUDIO_SAMPLE_RATE * dur);
   const buf = new Float32Array(len);
   for (let i = 0; i < len; i++) {
     const t = i / AUDIO_SAMPLE_RATE;
-    const wood = Math.sin(2 * Math.PI * 680 * t) * 0.35 + Math.sin(2 * Math.PI * 1420 * t) * 0.20;
-    const click = (Math.random() * 2 - 1) * 0.18;
+    const wood = Math.sin(2 * Math.PI * 520 * t) * 0.25;
+    const click = (Math.random() * 2 - 1) * 0.12;
     buf[i] = (wood + click) * Math.exp(-t * decay);
   }
   return buf;
 }
 
-function createHatSample(dur = 0.045, decay = 200) {
+function createHatSample(dur = 0.04, decay = 180) {
   const len = Math.floor(AUDIO_SAMPLE_RATE * dur);
   const buf = new Float32Array(len);
   for (let i = 0; i < len; i++) {
     const t = i / AUDIO_SAMPLE_RATE;
-    buf[i] = (Math.random() * 2 - 1) * Math.exp(-t * decay) * 0.14;
+    buf[i] = (Math.random() * 2 - 1) * Math.exp(-t * decay) * 0.09;
   }
   return buf;
 }
 
-function createShakerSample(dur = 0.08, decay = 55) {
+function createShakerSample(dur = 0.07, decay = 45) {
   const len = Math.floor(AUDIO_SAMPLE_RATE * dur);
   const buf = new Float32Array(len);
   for (let i = 0; i < len; i++) {
     const t = i / AUDIO_SAMPLE_RATE;
-    buf[i] = (Math.random() * 2 - 1) * Math.exp(-t * decay) * 0.12;
+    buf[i] = (Math.random() * 2 - 1) * Math.exp(-t * decay) * 0.08;
   }
   return buf;
 }
 
-const kickLofi = createKickSample(0.22, 92, 38, 16);
-const snareLofi = createSnareSample(0.20, 230, 22);
-const rimshotLofi = createRimshotSample(0.12, 36);
-const hatLofi = createHatSample(0.045, 190);
-const shakerLofi = createShakerSample(0.08, 50);
+const kickSoft = createKickSample(0.24, 75, 36, 12);
+const snareSoft = createSnareSample(0.20, 180, 18);
+const rimSoft = createRimshotSample(0.10, 42);
+const hatSoft = createHatSample(0.04, 180);
+const shakerSoft = createShakerSample(0.07, 45);
 
 function addHit(pcm, offsetSample, totalSamples, sampleBuf, volL = 1.0, volR = 1.0) {
   const len = sampleBuf.length;
@@ -90,867 +86,240 @@ function addHit(pcm, offsetSample, totalSamples, sampleBuf, volL = 1.0, volR = 1
 }
 
 // -------------------------------------------------------------------------
-// TRACK 1: "Rainy Tokyo Coffeehouse" (120.0s / 2 Minutes Chillhop Lofi)
-// 60 bars @ 75 bpm (2.0s per bar)
-// Progression: Fmaj9 -> Em11 -> Dm9 -> G13 -> Cmaj9 -> Bdim7 -> Am9 -> D7
-// Instruments: Fender Rhodes with stereo tremolo, rain/vinyl texture,
-// warm sub-bass, sleepy jazz piano solos, relaxed swung beat.
+// Fast Sine Wavetable Oscillator
 // -------------------------------------------------------------------------
-function generateTrack1() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
+const TABLE_SIZE = 4096;
+const SINE_TABLE = new Float32Array(TABLE_SIZE);
+for (let i = 0; i < TABLE_SIZE; i++) {
+  SINE_TABLE[i] = Math.sin((i / TABLE_SIZE) * 2 * Math.PI);
+}
 
-  const chordProg = [
-    [174.61, 220.00, 261.63, 329.63, 392.00], // Fmaj9
-    [164.81, 196.00, 246.94, 293.66, 349.23], // Em11
-    [146.83, 220.00, 261.63, 329.63, 349.23], // Dm9
-    [196.00, 246.94, 293.66, 329.63, 369.99], // G13
-    [130.81, 164.81, 196.00, 246.94, 293.66], // Cmaj9
-    [123.47, 146.83, 174.61, 220.00, 261.63], // Bdim7
-    [110.00, 164.81, 220.00, 261.63, 329.63], // Am9
-    [146.83, 220.00, 293.66, 369.99, 440.00], // D7
-  ];
+function oscSin(phase) {
+  const idx = Math.floor((phase - Math.floor(phase)) * TABLE_SIZE);
+  return SINE_TABLE[idx & (TABLE_SIZE - 1)];
+}
 
-  for (let i = 0; i < total; i++) {
+// -------------------------------------------------------------------------
+// Core Ambient Sleep Lofi Track Synthesizer
+// -------------------------------------------------------------------------
+export function synthesizeAmbientSleepTrack(spec) {
+  const {
+    dur = 210, // Duration in seconds (180 to 300)
+    bpm = 60, // Beats per minute (50 to 68)
+    chords = [], // Array of chord arrays [freq1, freq2, ...]
+    melodyNotes = [], // Melodic note pool
+    leadInstrument = "rhodes", // "rhodes" | "felt_piano" | "kalimba" | "celeste" | "nylon_guitar" | "flute" | "music_box" | "singing_bowl"
+    padStyle = "warm_analog", // "warm_analog" | "lush_silk" | "celestial_shimmer" | "deep_theta"
+    ambientBed = "rain", // "rain" | "ocean" | "fireplace" | "crickets" | "wind" | "vinyl" | "stream" | "night_mist"
+    drumStyle = "sleepy_lofi", // "sleepy_lofi" | "soft_brushes" | "heartbeat" | "none"
+    barSec = null, // Bar duration (auto-computed if null)
+  } = spec;
+
+  const totalSamples = Math.floor(AUDIO_SAMPLE_RATE * dur);
+  const tempL = new Float32Array(totalSamples);
+  const tempR = new Float32Array(totalSamples);
+
+  const secondsPerBeat = 60 / bpm;
+  const barDuration = barSec || (secondsPerBeat * 4); // 4 beats per bar
+  const numChords = chords.length;
+
+  // 1. Ambient background layer
+  let oceanPhase = 0;
+  for (let i = 0; i < totalSamples; i++) {
     const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chordProg[bar % chordProg.length];
+    let ambL = 0, ambR = 0;
 
-    // Gentle low-pass envelope evolving across the track
-    let filterCutoff = 0.85;
-    if (bar >= 42 && bar < 50) filterCutoff = 0.45; // breakdown filter sweep
-    else if (bar < 8) filterCutoff = 0.55 + (bar / 8) * 0.30;
+    if (ambientBed === "rain" || ambientBed === "night_mist") {
+      const rainNoise = (Math.random() * 2 - 1) * 0.016;
+      const drip = (Math.random() > 0.9998) ? (Math.random() * 2 - 1) * 0.035 : 0;
+      ambL = rainNoise + drip;
+      ambR = rainNoise - drip;
+    } else if (ambientBed === "ocean") {
+      oceanPhase = (t % 12.0) / 12.0;
+      const swell = Math.sin(oceanPhase * Math.PI) * Math.sin(oceanPhase * Math.PI);
+      const foam = (Math.random() * 2 - 1) * 0.02 * swell;
+      const deepRumble = Math.sin(2 * Math.PI * 45 * t) * 0.018 * swell;
+      ambL = foam * 1.1 + deepRumble;
+      ambR = foam * 0.9 + deepRumble;
+    } else if (ambientBed === "fireplace") {
+      const pop = (Math.random() > 0.9988) ? (Math.random() * 2 - 1) * 0.05 : 0;
+      const warmth = (Math.random() * 2 - 1) * 0.01;
+      ambL = pop + warmth;
+      ambR = pop * 0.8 + warmth;
+    } else if (ambientBed === "crickets") {
+      const chirpEnv = Math.max(0, Math.sin(2 * Math.PI * 2.8 * t)) ** 4;
+      const chirpTone = (Math.sin(2 * Math.PI * 4800 * t) + Math.sin(2 * Math.PI * 5200 * t)) * 0.010 * chirpEnv;
+      const breeze = (Math.random() * 2 - 1) * 0.006;
+      ambL = chirpTone * 1.2 + breeze;
+      ambR = chirpTone * 0.8 + breeze;
+    } else if (ambientBed === "wind" || ambientBed === "stream") {
+      const windLfo = 0.5 + 0.5 * Math.sin(2 * Math.PI * 0.12 * t);
+      const flow = (Math.random() * 2 - 1) * 0.014 * windLfo;
+      ambL = flow * 1.1;
+      ambR = flow * 0.9;
+    } else {
+      const vinylDust = (Math.random() > 0.9992) ? (Math.random() * 2 - 1) * 0.025 : 0;
+      const tape = (Math.random() * 2 - 1) * 0.007;
+      ambL = vinylDust + tape;
+      ambR = vinylDust + tape;
+    }
 
-    // Fender Rhodes Piano with Stereo Tremolo & Tape Warmth
-    const tremoloL = 0.85 + 0.15 * Math.sin(2 * Math.PI * 3.8 * t);
-    const tremoloR = 0.85 + 0.15 * Math.cos(2 * Math.PI * 3.8 * t);
-    let rhodesL = 0, rhodesR = 0;
+    tempL[i] = ambL;
+    tempR[i] = ambR;
+  }
+
+  // 2. Synthesize chord progression and pads using optimized phase accumulators
+  const totalBars = Math.ceil(dur / barDuration);
+  for (let bar = 0; bar < totalBars; bar++) {
+    const barStartSample = Math.floor(bar * barDuration * AUDIO_SAMPLE_RATE);
+    const barEndSample = Math.min(totalSamples, Math.floor((bar + 1) * barDuration * AUDIO_SAMPLE_RATE));
+    const chord = chords[bar % numChords];
+    const rootFreq = chord[0];
+    const bassFreq = rootFreq > 130 ? rootFreq / 2 : rootFreq;
+    const barSamples = barEndSample - barStartSample;
+
+    const dPhases = chord.map(f => f / AUDIO_SAMPLE_RATE);
+    const dPhasesDetune = chord.map(f => (f * 1.0018) / AUDIO_SAMPLE_RATE);
+    const phases = new Float32Array(chord.length);
+    const phasesDetune = new Float32Array(chord.length);
     for (let c = 0; c < chord.length; c++) {
-      const f = chord[c];
-      const tone = (sine(f, t) * 0.08 + sine(f * 2, t) * 0.025 + sine(f * 3, t) * 0.008);
-      rhodesL += tone * tremoloL;
-      rhodesR += tone * tremoloR;
-    }
-    rhodesL *= filterCutoff;
-    rhodesR *= filterCutoff;
-
-    // Deep Mellow Upright Sub-Bass
-    let bass = 0;
-    if ((bar >= 6 && bar < 42) || bar >= 50) {
-      const bFreq = chord[0] / 2;
-      bass = sine(bFreq, t) * 0.28 * (0.92 + 0.08 * Math.sin(2 * Math.PI * 1.2 * t));
+      phases[c] = (barStartSample * dPhases[c]) % 1;
+      phasesDetune[c] = (barStartSample * dPhasesDetune[c]) % 1;
     }
 
-    // Melodic Electric Piano Lead Solos (bars 16-30 and 50-58)
-    let leadL = 0, leadR = 0;
-    if ((bar >= 16 && bar < 30) || (bar >= 50 && bar < 58)) {
-      const pentatonic = [329.63, 392.00, 440.00, 523.25, 659.25, 783.99];
-      const mStep = Math.floor(t / 0.5) % pentatonic.length;
-      const mT = t % 0.5;
-      const mf = pentatonic[mStep];
-      const lTone = (sine(mf, mT) * 0.10 + sine(mf * 2, mT) * 0.03) * Math.exp(-mT * 3.2);
-      leadL = lTone * 0.7;
-      leadR = lTone * 1.1;
-    }
+    const dBass = (bassFreq / 2) / AUDIO_SAMPLE_RATE;
+    let pBass = (barStartSample * dBass) % 1;
 
-    // Soft rainy cafe texture & subtle vinyl crackle
-    const vinyl = (Math.random() > 0.996 ? (Math.random() * 2 - 1) * 0.035 : 0) + (Math.random() * 2 - 1) * 0.008;
+    for (let i = barStartSample, localIdx = 0; i < barEndSample; i++, localIdx++) {
+      const barNorm = localIdx / barSamples;
+      const chordEnv = Math.sin(barNorm * Math.PI);
+      const t = i / AUDIO_SAMPLE_RATE;
 
-    tempL[i] = rhodesL * 1.1 + bass + leadL + vinyl;
-    tempR[i] = rhodesR * 1.1 + bass + leadR + vinyl;
-  }
+      const tremolo = 0.88 + 0.12 * Math.sin(2 * Math.PI * 3.2 * t);
+      const chorus = 0.88 + 0.12 * Math.cos(2 * Math.PI * 2.8 * t);
 
-  // Laid-back, lazy swung Lofi drums (bars 8-42, 50-58)
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 8; bar < 58; bar++) {
-    if (bar >= 42 && bar < 50) continue; // Ambient breakdown
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    // Kick on beat 1 and swung beat 3+
-    addHit(tempL, barStart, total, kickLofi, 0.40, 0.40);
-    addHit(tempR, barStart, total, kickLofi, 0.40, 0.40);
-    addHit(tempL, barStart + Math.floor(beatSamples * 2.3), total, kickLofi, 0.34, 0.34);
-    addHit(tempR, barStart + Math.floor(beatSamples * 2.3), total, kickLofi, 0.34, 0.34);
-    // Soft snare / rimshot on beats 2 & 4
-    addHit(tempL, barStart + beatSamples, total, snareLofi, 0.28, 0.30);
-    addHit(tempR, barStart + beatSamples, total, snareLofi, 0.30, 0.28);
-    addHit(tempL, barStart + beatSamples * 3, total, rimshotLofi, 0.32, 0.35);
-    addHit(tempR, barStart + beatSamples * 3, total, rimshotLofi, 0.35, 0.32);
-    // Swung Hi-Hats with gentle velocity variation
-    for (let h = 0; h < 4; h++) {
-      const swingOffset = (h % 2 === 1) ? Math.floor(beatSamples * 0.08) : 0;
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5) + swingOffset;
-      addHit(tempL, hPos, total, hatLofi, 0.12, 0.15);
-      addHit(tempR, hPos, total, hatLofi, 0.15, 0.12);
-    }
-  }
-
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
-    out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
-    out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
-  }
-  return out;
-}
-
-// -------------------------------------------------------------------------
-// TRACK 2: "Midnight Study Sanctuary" (120.0s Acoustic Guitar & Cozy Beats)
-// 60 bars @ 72 bpm (2.0s per bar)
-// Progression: Cmaj7 -> G/B -> Am9 -> Fmaj7 -> Dm9 -> Em7 -> Fmaj9 -> Gsus4
-// Instruments: Fingerstyle nylon guitar arpeggios, warm mellow upright bass,
-// sleepy flute counterpoint, lazy relaxed hip hop drum rhythm.
-// -------------------------------------------------------------------------
-function generateTrack2() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
-
-  const chords = [
-    [130.81, 164.81, 196.00, 246.94], // Cmaj7
-    [123.47, 146.83, 196.00, 246.94], // G/B
-    [110.00, 164.81, 220.00, 261.63], // Am9
-    [174.61, 220.00, 261.63, 329.63], // Fmaj7
-    [146.83, 220.00, 261.63, 329.63], // Dm9
-    [164.81, 196.00, 246.94, 293.66], // Em7
-    [174.61, 220.00, 261.63, 349.23], // Fmaj9
-    [196.00, 261.63, 293.66, 392.00], // Gsus4
-  ];
-
-  for (let i = 0; i < total; i++) {
-    const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chords[bar % chords.length];
-
-    // Plucked Nylon Guitar Fingerstyle Arpeggio
-    const gStep = Math.floor(t / 0.25) % chord.length;
-    const gT = t % 0.25;
-    const gFreq = chord[gStep] * 2;
-    const guitarNote = (sine(gFreq, gT) * 0.16 + sine(gFreq * 2, gT) * 0.05 + sine(gFreq * 3, gT) * 0.015) * Math.exp(-gT * 7.5);
-    const pan = (gStep % 2 === 0) ? 0.7 : 1.3;
-
-    // Warm Ambient Pad Swell
-    let pad = 0;
-    for (let c = 0; c < chord.length; c++) {
-      pad += sine(chord[c], t) * 0.022;
-    }
-
-    // Gentle Acoustic Upright Bass (bars 6-44, 48-60)
-    let bass = 0;
-    if ((bar >= 6 && bar < 44) || bar >= 48) {
-      const bFreq = chord[0] / 2;
-      bass = (sine(bFreq, t) * 0.26 + sine(bFreq * 2, t) * 0.06) * (0.95 + 0.05 * Math.sin(2 * Math.PI * 1.5 * t));
-    }
-
-    // Sleepy Bamboo Flute Melody (bars 16-28 and 48-56)
-    let flute = 0;
-    if ((bar >= 16 && bar < 28) || (bar >= 48 && bar < 56)) {
-      const scale = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25];
-      const fStep = Math.floor(t / 0.66) % scale.length;
-      const fT = t % 0.66;
-      const vibrato = 1 + 0.02 * Math.sin(2 * Math.PI * 4.5 * fT);
-      flute = (sine(scale[fStep] * vibrato, fT) * 0.12 + sine(scale[fStep] * 2 * vibrato, fT) * 0.03) * Math.exp(-fT * 2.2);
-    }
-
-    const vinyl = (Math.random() > 0.997 ? (Math.random() * 2 - 1) * 0.03 : 0);
-
-    tempL[i] = guitarNote * (2 - pan) + pad + bass + flute * 0.8 + vinyl;
-    tempR[i] = guitarNote * pan + pad + bass + flute * 1.2 + vinyl;
-  }
-
-  // Chill Study Drum Beat
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 6; bar < 58; bar++) {
-    if (bar >= 44 && bar < 48) continue;
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    addHit(tempL, barStart, total, kickLofi, 0.38, 0.38);
-    addHit(tempR, barStart, total, kickLofi, 0.38, 0.38);
-    addHit(tempL, barStart + beatSamples * 2, total, kickLofi, 0.30, 0.30);
-    addHit(tempR, barStart + beatSamples * 2, total, kickLofi, 0.30, 0.30);
-    addHit(tempL, barStart + beatSamples, total, rimshotLofi, 0.30, 0.32);
-    addHit(tempR, barStart + beatSamples, total, rimshotLofi, 0.32, 0.30);
-    addHit(tempL, barStart + beatSamples * 3, total, snareLofi, 0.28, 0.30);
-    addHit(tempR, barStart + beatSamples * 3, total, snareLofi, 0.30, 0.28);
-    // Soft Shaker & Hat groove
-    for (let h = 0; h < 4; h++) {
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5);
-      addHit(tempL, hPos, total, shakerLofi, 0.15, 0.18);
-      addHit(tempR, hPos, total, shakerLofi, 0.18, 0.15);
-    }
-  }
-
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
-    out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
-    out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
-  }
-  return out;
-}
-
-// -------------------------------------------------------------------------
-// TRACK 3: "Golden Hour Sakura Garden" (120.0s Oriental Zen Lofi / Koto & Flute)
-// 60 bars @ 80 bpm (2.0s per bar)
-// Progression: Gmaj7 -> Bm7 -> Cmaj7 -> D6 -> Em9 -> Bm7 -> Am9 -> D7
-// Instruments: Delicate plucked Japanese Koto arpeggios, airy bamboo flute whispers,
-// soft warm analog synth pad, gentle brushed hi-hats, soothing wind chimes.
-// -------------------------------------------------------------------------
-function generateTrack3() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
-
-  const chords = [
-    [196.00, 246.94, 293.66, 369.99], // Gmaj7
-    [123.47, 146.83, 220.00, 246.94], // Bm7
-    [130.81, 164.81, 196.00, 246.94], // Cmaj7
-    [146.83, 220.00, 246.94, 293.66], // D6
-    [164.81, 196.00, 246.94, 293.66], // Em9
-    [123.47, 146.83, 220.00, 246.94], // Bm7
-    [110.00, 164.81, 220.00, 261.63], // Am9
-    [146.83, 220.00, 293.66, 369.99], // D7
-  ];
-
-  for (let i = 0; i < total; i++) {
-    const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chords[bar % chords.length];
-
-    // Japanese Koto / Guzheng Plucks
-    const kStep = Math.floor(t / 0.33) % chord.length;
-    const kT = t % 0.33;
-    const kFreq = chord[kStep] * 2;
-    const koto = (sine(kFreq, kT) * 0.18 + sine(kFreq * 2.02, kT) * 0.08 + sine(kFreq * 3.01, kT) * 0.02) * Math.exp(-kT * 6.5);
-
-    // Warm Analog Silk Pad
-    let pad = 0;
-    for (let c = 0; c < chord.length; c++) {
-      pad += sine(chord[c], t) * 0.025;
-    }
-
-    // Sub-Bass
-    let bass = 0;
-    if ((bar >= 8 && bar < 42) || bar >= 50) {
-      bass = sine(chord[0] / 2, t) * 0.25;
-    }
-
-    // Shakuhachi Flute Melody (bars 16-32, 50-58)
-    let flute = 0;
-    if ((bar >= 16 && bar < 32) || (bar >= 50 && bar < 58)) {
-      const pentatonic = [392.00, 440.00, 493.88, 587.33, 659.25, 783.99];
-      const fStep = Math.floor(t / 0.5) % pentatonic.length;
-      const fT = t % 0.5;
-      const breath = (Math.random() * 2 - 1) * 0.015;
-      flute = (sine(pentatonic[fStep], fT) * 0.12 + breath) * Math.exp(-fT * 2.8);
-    }
-
-    // Crystalline Zen Wind Chimes
-    const chime = (Math.sin(2 * Math.PI * 1864 * t) * 0.03 + Math.sin(2 * Math.PI * 2349 * t) * 0.02) * (0.5 + 0.5 * Math.sin(t * 0.8));
-
-    tempL[i] = koto * 1.1 + pad + bass + flute * 0.8 + chime * 0.5;
-    tempR[i] = koto * 0.9 + pad + bass + flute * 1.2 + chime * 0.8;
-  }
-
-  // Gentle Zen Percussion
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 8; bar < 58; bar++) {
-    if (bar >= 42 && bar < 50) continue;
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    addHit(tempL, barStart, total, kickLofi, 0.36, 0.36);
-    addHit(tempR, barStart, total, kickLofi, 0.36, 0.36);
-    addHit(tempL, barStart + beatSamples, total, rimshotLofi, 0.30, 0.32);
-    addHit(tempR, barStart + beatSamples, total, rimshotLofi, 0.32, 0.30);
-    addHit(tempL, barStart + beatSamples * 3, total, rimshotLofi, 0.30, 0.32);
-    addHit(tempR, barStart + beatSamples * 3, total, rimshotLofi, 0.32, 0.30);
-    for (let h = 0; h < 4; h++) {
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5);
-      addHit(tempL, hPos, total, hatLofi, 0.11, 0.14);
-      addHit(tempR, hPos, total, hatLofi, 0.14, 0.11);
-    }
-  }
-
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
-    out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
-    out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
-  }
-  return out;
-}
-
-// -------------------------------------------------------------------------
-// TRACK 4: "Lavender Clouds Sunset" (120.0s Chill Dreamhop / Kalimba & Tape Synth)
-// 60 bars @ 76 bpm (2.0s per bar)
-// Progression: Ebmaj7 -> Cm7 -> Fm9 -> Bb13 -> Gm7 -> C7 -> Fm9 -> Bb7
-// Instruments: Crystalline kalimba / music box bell patterns, lush warm analog tape pads,
-// slow heartbeat kick, deep gentle bassline, dreamy drifting chords.
-// -------------------------------------------------------------------------
-function generateTrack4() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
-
-  const chords = [
-    [155.56, 196.00, 233.08, 293.66], // Ebmaj7
-    [130.81, 155.56, 196.00, 233.08], // Cm7
-    [174.61, 207.65, 261.63, 311.13], // Fm9
-    [116.54, 185.00, 233.08, 293.66], // Bb13
-    [196.00, 233.08, 293.66, 349.23], // Gm7
-    [130.81, 164.81, 196.00, 233.08], // C7
-    [174.61, 207.65, 261.63, 311.13], // Fm9
-    [116.54, 146.83, 207.65, 233.08], // Bb7
-  ];
-
-  for (let i = 0; i < total; i++) {
-    const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chords[bar % chords.length];
-
-    // Dreamy Crystalline Kalimba Chimes
-    const kalStep = Math.floor(t / 0.25) % chord.length;
-    const kalT = t % 0.25;
-    const kalFreq = chord[kalStep] * 3;
-    const kalimba = (sine(kalFreq, kalT) * 0.14 + sine(kalFreq * 2.76, kalT) * 0.05) * Math.exp(-kalT * 8.0);
-    const kalPan = (kalStep % 2 === 0) ? 0.6 : 1.4;
-
-    // Analog Tape Pad Chorus Swell
-    const chorus = Math.sin(2 * Math.PI * 0.25 * t);
-    let pad = 0;
-    for (let c = 0; c < chord.length; c++) {
-      pad += (sine(chord[c] * 1.5, t) * 0.03 + sine(chord[c] * 3, t + 0.002) * 0.01) * (0.8 + 0.2 * chorus);
-    }
-
-    // Warm sub-bass
-    let bass = 0;
-    if ((bar >= 6 && bar < 42) || bar >= 50) {
-      bass = sine(chord[0] / 2, t) * 0.27;
-    }
-
-    // Distant dream harp flutter
-    const harp = (Math.sin(2 * Math.PI * (chord[1] * 4) * t) * 0.03) * Math.exp(-(t % 1.0) * 3);
-
-    const vinyl = (Math.random() > 0.996 ? (Math.random() * 2 - 1) * 0.035 : 0);
-
-    tempL[i] = kalimba * (2 - kalPan) + pad + bass + harp * 0.7 + vinyl;
-    tempR[i] = kalimba * kalPan + pad + bass + harp * 1.3 + vinyl;
-  }
-
-  // Heartbeat Dream Drum Pattern
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 6; bar < 58; bar++) {
-    if (bar >= 42 && bar < 50) continue;
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    // Double heartbeat kick on 1
-    addHit(tempL, barStart, total, kickLofi, 0.40, 0.40);
-    addHit(tempR, barStart, total, kickLofi, 0.40, 0.40);
-    addHit(tempL, barStart + Math.floor(beatSamples * 0.4), total, kickLofi, 0.28, 0.28);
-    addHit(tempR, barStart + Math.floor(beatSamples * 0.4), total, kickLofi, 0.28, 0.28);
-    // Snare on 2 & 4
-    addHit(tempL, barStart + beatSamples, total, snareLofi, 0.30, 0.32);
-    addHit(tempR, barStart + beatSamples, total, snareLofi, 0.32, 0.30);
-    addHit(tempL, barStart + beatSamples * 3, total, snareLofi, 0.30, 0.32);
-    addHit(tempR, barStart + beatSamples * 3, total, snareLofi, 0.32, 0.30);
-    // Shaker ticks
-    for (let h = 0; h < 4; h++) {
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5);
-      addHit(tempL, hPos, total, shakerLofi, 0.14, 0.16);
-      addHit(tempR, hPos, total, shakerLofi, 0.16, 0.14);
-    }
-  }
-
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
-    out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
-    out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
-  }
-  return out;
-}
-
-// -------------------------------------------------------------------------
-// TRACK 5: "Midnight Bookshop & Warm Tea" (120.0s Nostalgic Jazzhop / Muted Horn & Bass)
-// 60 bars @ 74 bpm (2.0s per bar)
-// Progression: Dm9 -> G13 -> Cmaj9 -> A7b9 -> Dm9 -> G7#9 -> Em7 -> A13
-// Instruments: Romantic melancholic jazz progression, warm acoustic upright walking bass,
-// soft muted jazz trumpet lead, sweet vibraphone counter-melodies, cozy vinyl crackle.
-// -------------------------------------------------------------------------
-function generateTrack5() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
-
-  const chords = [
-    [146.83, 220.00, 261.63, 329.63], // Dm9
-    [196.00, 246.94, 293.66, 369.99], // G13
-    [130.81, 164.81, 196.00, 246.94], // Cmaj9
-    [110.00, 174.61, 220.00, 277.18], // A7b9
-    [146.83, 220.00, 261.63, 329.63], // Dm9
-    [196.00, 246.94, 311.13, 392.00], // G7#9
-    [164.81, 196.00, 246.94, 293.66], // Em7
-    [110.00, 164.81, 220.00, 329.63], // A13
-  ];
-
-  for (let i = 0; i < total; i++) {
-    const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chords[bar % chords.length];
-
-    // Vintage Jazz Electric Piano Chords
-    let piano = 0;
-    for (let c = 0; c < chord.length; c++) {
-      piano += (sine(chord[c], t) * 0.07 + sine(chord[c] * 2, t) * 0.02);
-    }
-
-    // Walking Acoustic Upright Bass (swinging 4 notes per bar)
-    let bass = 0;
-    if ((bar >= 6 && bar < 42) || bar >= 48) {
-      const bStep = Math.floor(t / 0.5) % chord.length;
-      const bT = t % 0.5;
-      const bFreq = chord[bStep] / 2;
-      bass = (sine(bFreq, bT) * 0.28 + sine(bFreq * 2, bT) * 0.08) * Math.exp(-bT * 2.2);
-    }
-
-    // Muted Jazz Trumpet Lead (bars 16-30 and 48-56)
-    let trumpet = 0;
-    if ((bar >= 16 && bar < 30) || (bar >= 48 && bar < 56)) {
-      const scale = [293.66, 329.63, 349.23, 392.00, 440.00, 523.25];
-      const mStep = Math.floor(t / 0.66) % scale.length;
-      const mT = t % 0.66;
-      const vibrato = 1 + 0.025 * Math.sin(2 * Math.PI * 5.0 * mT);
-      const tone = (sine(scale[mStep] * vibrato, mT) * 0.12 + sine(scale[mStep] * 2 * vibrato, mT) * 0.04) * Math.exp(-mT * 2.0);
-      trumpet = tone;
-    }
-
-    // Cozy bookshop vinyl hiss & soft pops
-    const vinyl = (Math.random() > 0.995 ? (Math.random() * 2 - 1) * 0.04 : 0);
-
-    tempL[i] = piano * 1.05 + bass + trumpet * 0.8 + vinyl;
-    tempR[i] = piano * 0.95 + bass + trumpet * 1.2 + vinyl;
-  }
-
-  // Smooth Swung Jazzhop Drum Rhythm
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 6; bar < 58; bar++) {
-    if (bar >= 42 && bar < 48) continue;
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    addHit(tempL, barStart, total, kickLofi, 0.38, 0.38);
-    addHit(tempR, barStart, total, kickLofi, 0.38, 0.38);
-    addHit(tempL, barStart + beatSamples, total, rimshotLofi, 0.32, 0.34);
-    addHit(tempR, barStart + beatSamples, total, rimshotLofi, 0.34, 0.32);
-    addHit(tempL, barStart + beatSamples * 2, total, kickLofi, 0.28, 0.28);
-    addHit(tempR, barStart + beatSamples * 2, total, kickLofi, 0.28, 0.28);
-    addHit(tempL, barStart + beatSamples * 3, total, rimshotLofi, 0.32, 0.34);
-    addHit(tempR, barStart + beatSamples * 3, total, rimshotLofi, 0.34, 0.32);
-    for (let h = 0; h < 4; h++) {
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5);
-      addHit(tempL, hPos, total, hatLofi, 0.12, 0.15);
-      addHit(tempR, hPos, total, hatLofi, 0.15, 0.12);
-    }
-  }
-
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
-    out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
-    out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
-  }
-  return out;
-}
-
-// -------------------------------------------------------------------------
-// TRACK 6: "Starry Night Sleepscape" (120.0s Deep Ambient Lofi / Celestial Piano)
-// 60 bars @ 66 bpm (2.0s per bar - ultra slow and peaceful)
-// Progression: Dbmaj7 -> Bbm9 -> Gbmaj7 -> Ab7 -> Ebm9 -> Fm7 -> Gbmaj9 -> Abadd9
-// Instruments: Ultra-slow soothing grand piano chords with long dreamy reverb decays,
-// ethereal choir/celestial pads, gentle sleepy kick and rimshot, starry sparkle chimes.
-// -------------------------------------------------------------------------
-function generateTrack6() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
-
-  const chords = [
-    [138.59, 174.61, 207.65, 261.63], // Dbmaj7
-    [116.54, 138.59, 174.61, 207.65], // Bbm9
-    [185.00, 233.08, 277.18, 349.23], // Gbmaj7
-    [207.65, 261.63, 311.13, 369.99], // Ab7
-    [155.56, 185.00, 233.08, 277.18], // Ebm9
-    [174.61, 207.65, 261.63, 311.13], // Fm7
-    [185.00, 233.08, 277.18, 369.99], // Gbmaj9
-    [207.65, 261.63, 311.13, 415.30], // Abadd9
-  ];
-
-  for (let i = 0; i < total; i++) {
-    const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chords[bar % chords.length];
-
-    // Grand Piano Slow Arpeggio with Long Decays
-    const pStep = Math.floor(t / 0.5) % chord.length;
-    const pT = t % 0.5;
-    const pFreq = chord[pStep] * 1.5;
-    const piano = (sine(pFreq, pT) * 0.15 + sine(pFreq * 2, pT) * 0.05 + sine(pFreq * 3, pT) * 0.015) * Math.exp(-pT * 4.0);
-
-    // Ethereal Celestial Choir Pad
-    let choir = 0;
-    for (let c = 0; c < chord.length; c++) {
-      choir += (sine(chord[c] * 2, t) * 0.02 + sine(chord[c] * 4, t + 0.005) * 0.008);
-    }
-
-    // Warm deep ambient bass
-    let bass = 0;
-    if ((bar >= 6 && bar < 44) || bar >= 48) {
-      bass = sine(chord[0] / 2, t) * 0.25;
-    }
-
-    // Starry Night Sparkle Chimes
-    const sparkle = (Math.sin(2 * Math.PI * 2793 * t) * 0.03 + Math.sin(2 * Math.PI * 3729 * t) * 0.02) * Math.exp(-(t % 2.0) * 2.5);
-
-    tempL[i] = piano * 1.1 + choir + bass + sparkle * 0.7;
-    tempR[i] = piano * 0.9 + choir + bass + sparkle * 1.3;
-  }
-
-  // Soft Sleepy Beats
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 8; bar < 58; bar++) {
-    if (bar >= 44 && bar < 48) continue;
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    addHit(tempL, barStart, total, kickLofi, 0.32, 0.32);
-    addHit(tempR, barStart, total, kickLofi, 0.32, 0.32);
-    addHit(tempL, barStart + beatSamples * 2, total, rimshotLofi, 0.25, 0.28);
-    addHit(tempR, barStart + beatSamples * 2, total, rimshotLofi, 0.28, 0.25);
-    for (let h = 0; h < 4; h++) {
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5);
-      addHit(tempL, hPos, total, hatLofi, 0.10, 0.12);
-      addHit(tempR, hPos, total, hatLofi, 0.12, 0.10);
-    }
-  }
-
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
-    out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
-    out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
-  }
-  return out;
-}
-
-// -------------------------------------------------------------------------
-// TRACK 7: "Cozy Fireside Solitude" (120.0s Warm Acoustic Lofi / Fingerstyle & Melodica)
-// 60 bars @ 78 bpm (2.0s per bar)
-// Progression: Am9 -> Fmaj7 -> Cmaj9 -> G6 -> Dm9 -> Fmaj7 -> Em7 -> E7
-// Instruments: Warm fingerstyle acoustic guitar chords, mellow vintage melodica/flute lead,
-// soothing crackling fireplace warmth, lazy swung drum pattern with brushed rimshots.
-// -------------------------------------------------------------------------
-function generateTrack7() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
-
-  const chords = [
-    [110.00, 164.81, 220.00, 261.63], // Am9
-    [174.61, 220.00, 261.63, 329.63], // Fmaj7
-    [130.81, 164.81, 196.00, 246.94], // Cmaj9
-    [196.00, 246.94, 293.66, 329.63], // G6
-    [146.83, 220.00, 261.63, 329.63], // Dm9
-    [174.61, 220.00, 261.63, 349.23], // Fmaj7
-    [164.81, 196.00, 246.94, 293.66], // Em7
-    [164.81, 207.65, 246.94, 293.66], // E7
-  ];
-
-  for (let i = 0; i < total; i++) {
-    const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chords[bar % chords.length];
-
-    // Acoustic Guitar Fingerstyle Strum
-    const gStep = Math.floor(t / 0.25) % chord.length;
-    const gT = t % 0.25;
-    const gFreq = chord[gStep] * 2;
-    const guitar = (sine(gFreq, gT) * 0.16 + sine(gFreq * 2, gT) * 0.05) * Math.exp(-gT * 8.0);
-
-    // Warm Melodica / Flute Lead (bars 16-32, 48-58)
-    let melodica = 0;
-    if ((bar >= 16 && bar < 32) || (bar >= 48 && bar < 58)) {
-      const scale = [220.00, 261.63, 293.66, 329.63, 392.00, 440.00];
-      const mStep = Math.floor(t / 0.5) % scale.length;
-      const mT = t % 0.5;
-      const vibrato = 1 + 0.02 * Math.sin(2 * Math.PI * 4.2 * mT);
-      melodica = (sine(scale[mStep] * vibrato, mT) * 0.12 + sine(scale[mStep] * 2 * vibrato, mT) * 0.03) * Math.exp(-mT * 2.5);
-    }
-
-    // Bass
-    let bass = 0;
-    if ((bar >= 6 && bar < 42) || bar >= 48) {
-      bass = sine(chord[0] / 2, t) * 0.26;
-    }
-
-    // Cozy crackling fireplace warmth
-    const crackle = (Math.random() > 0.995 ? (Math.random() * 2 - 1) * 0.04 : 0);
-
-    tempL[i] = guitar * 1.1 + melodica * 0.8 + bass + crackle;
-    tempR[i] = guitar * 0.9 + melodica * 1.2 + bass + crackle;
-  }
-
-  // Fireside Drums
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 6; bar < 58; bar++) {
-    if (bar >= 42 && bar < 48) continue;
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    addHit(tempL, barStart, total, kickLofi, 0.36, 0.36);
-    addHit(tempR, barStart, total, kickLofi, 0.36, 0.36);
-    addHit(tempL, barStart + beatSamples, total, snareLofi, 0.28, 0.30);
-    addHit(tempR, barStart + beatSamples, total, snareLofi, 0.30, 0.28);
-    addHit(tempL, barStart + beatSamples * 2, total, kickLofi, 0.28, 0.28);
-    addHit(tempR, barStart + beatSamples * 2, total, kickLofi, 0.28, 0.28);
-    addHit(tempL, barStart + beatSamples * 3, total, rimshotLofi, 0.30, 0.32);
-    addHit(tempR, barStart + beatSamples * 3, total, rimshotLofi, 0.32, 0.30);
-    for (let h = 0; h < 4; h++) {
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5);
-      addHit(tempL, hPos, total, shakerLofi, 0.14, 0.16);
-      addHit(tempR, hPos, total, shakerLofi, 0.16, 0.14);
-    }
-  }
-
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
-    out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
-    out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
-  }
-  return out;
-}
-
-// -------------------------------------------------------------------------
-// TRACK 8: "Distant Ocean Memories" (120.0s Ethereal Seaside Lofi / Soft Rhodes Swells)
-// 60 bars @ 70 bpm (2.0s per bar)
-// Progression: Abmaj9 -> Fm9 -> Bbm9 -> Eb13 -> Cm7 -> Fm7 -> Bbm9 -> Eb7
-// Instruments: Gentle wave-like pad swells, sparkling electric piano arpeggios,
-// subtle tape flutter and pitch vibrato, soft ocean chillhop beat, peaceful harmonic resolution.
-// -------------------------------------------------------------------------
-function generateTrack8() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
-
-  const chords = [
-    [207.65, 261.63, 311.13, 392.00], // Abmaj9
-    [174.61, 207.65, 261.63, 311.13], // Fm9
-    [116.54, 138.59, 174.61, 207.65], // Bbm9
-    [155.56, 196.00, 233.08, 311.13], // Eb13
-    [130.81, 155.56, 196.00, 233.08], // Cm7
-    [174.61, 207.65, 261.63, 311.13], // Fm7
-    [116.54, 138.59, 174.61, 233.08], // Bbm9
-    [155.56, 196.00, 233.08, 277.18], // Eb7
-  ];
-
-  for (let i = 0; i < total; i++) {
-    const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chords[bar % chords.length];
-
-    // Ocean Wave-like Ambient Swell
-    const wave = 0.5 + 0.5 * Math.sin(2 * Math.PI * 0.15 * t);
-    let pad = 0;
-    for (let c = 0; c < chord.length; c++) {
-      pad += sine(chord[c] * 1.5, t) * 0.025 * wave;
-    }
-
-    // Electric Piano Sparkling Arpeggio
-    const pStep = Math.floor(t / 0.25) % chord.length;
-    const pT = t % 0.25;
-    const pFreq = chord[pStep] * 2;
-    const rhodes = (sine(pFreq, pT) * 0.14 + sine(pFreq * 2, pT) * 0.04) * Math.exp(-pT * 6.0);
-
-    // Deep Gentle Sub-Bass
-    let bass = 0;
-    if ((bar >= 6 && bar < 44) || bar >= 48) {
-      bass = sine(chord[0] / 2, t) * 0.27;
-    }
-
-    // Distant seaside chime
-    const chime = (Math.sin(2 * Math.PI * 3322 * t) * 0.02) * Math.exp(-(t % 3.0) * 2.0);
-
-    const vinyl = (Math.random() > 0.996 ? (Math.random() * 2 - 1) * 0.035 : 0);
-
-    tempL[i] = rhodes * 1.1 + pad + bass + chime * 0.7 + vinyl;
-    tempR[i] = rhodes * 0.9 + pad + bass + chime * 1.3 + vinyl;
-  }
-
-  // Soft Seaside Chillhop Beat
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 6; bar < 58; bar++) {
-    if (bar >= 44 && bar < 48) continue;
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    addHit(tempL, barStart, total, kickLofi, 0.36, 0.36);
-    addHit(tempR, barStart, total, kickLofi, 0.36, 0.36);
-    addHit(tempL, barStart + beatSamples, total, snareLofi, 0.28, 0.30);
-    addHit(tempR, barStart + beatSamples, total, snareLofi, 0.30, 0.28);
-    addHit(tempL, barStart + beatSamples * 3, total, rimshotLofi, 0.30, 0.32);
-    addHit(tempR, barStart + beatSamples * 3, total, rimshotLofi, 0.32, 0.30);
-    for (let h = 0; h < 4; h++) {
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5);
-      addHit(tempL, hPos, total, hatLofi, 0.11, 0.13);
-      addHit(tempR, hPos, total, hatLofi, 0.13, 0.11);
-    }
-  }
-
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
-    out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
-    out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
-  }
-  return out;
-}
-
-// -------------------------------------------------------------------------
-// TRACK 9: "Moonlit Forest Canopy" (120.0s Deep Ambient Flute & Nature Chimes)
-// -------------------------------------------------------------------------
-function generateTrack9() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
-
-  const chords = [
-    [164.81, 196.00, 246.94, 293.66], // Em9
-    [130.81, 164.81, 196.00, 246.94], // Cmaj7
-    [110.00, 164.81, 220.00, 261.63], // Am9
-    [123.47, 146.83, 185.00, 220.00], // Bm7
-    [130.81, 164.81, 196.00, 293.66], // Cmaj9
-    [146.83, 185.00, 220.00, 293.66], // D6
-    [164.81, 196.00, 246.94, 329.63], // Em9
-    [123.47, 155.56, 185.00, 246.94], // B7
-  ];
-
-  for (let i = 0; i < total; i++) {
-    const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chords[bar % chords.length];
-
-    const wind = 0.5 + 0.5 * Math.sin(2 * Math.PI * 0.12 * t);
-    let pad = 0;
-    for (let c = 0; c < chord.length; c++) {
-      pad += sine(chord[c] * 1.5, t) * 0.022 * wind;
-    }
-
-    let flute = 0;
-    if ((bar >= 12 && bar < 36) || (bar >= 44 && bar < 58)) {
-      const pentatonic = [329.63, 392.00, 440.00, 493.88, 587.33, 659.25];
-      const fStep = Math.floor(t / 0.5) % pentatonic.length;
-      const fT = t % 0.5;
-      const vib = 1 + 0.015 * Math.sin(2 * Math.PI * 5.0 * fT);
-      flute = (sine(pentatonic[fStep] * vib, fT) * 0.13 + sine(pentatonic[fStep] * 2 * vib, fT) * 0.03) * Math.exp(-fT * 2.2);
-    }
-
-    let bass = 0;
-    if ((bar >= 6 && bar < 44) || bar >= 48) {
-      bass = sine(chord[0] / 2, t) * 0.26;
-    }
-
-    const chimes = (Math.sin(2 * Math.PI * 2637 * t) * 0.02 + Math.sin(2 * Math.PI * 3951 * t) * 0.015) * Math.exp(-(t % 2.5) * 3.0);
-    const leaves = (Math.random() > 0.997 ? (Math.random() * 2 - 1) * 0.03 : 0);
-
-    tempL[i] = pad + flute * 1.1 + bass + chimes * 0.7 + leaves;
-    tempR[i] = pad + flute * 0.9 + bass + chimes * 1.3 + leaves;
-  }
-
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 6; bar < 58; bar++) {
-    if (bar >= 40 && bar < 44) continue;
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    addHit(tempL, barStart, total, kickLofi, 0.35, 0.35);
-    addHit(tempR, barStart, total, kickLofi, 0.35, 0.35);
-    addHit(tempL, barStart + beatSamples, total, rimshotLofi, 0.28, 0.30);
-    addHit(tempR, barStart + beatSamples, total, rimshotLofi, 0.30, 0.28);
-    addHit(tempL, barStart + beatSamples * 2, total, kickLofi, 0.25, 0.25);
-    addHit(tempR, barStart + beatSamples * 2, total, kickLofi, 0.25, 0.25);
-    addHit(tempL, barStart + beatSamples * 3, total, rimshotLofi, 0.28, 0.30);
-    addHit(tempR, barStart + beatSamples * 3, total, rimshotLofi, 0.30, 0.28);
-    for (let h = 0; h < 4; h++) {
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5);
-      addHit(tempL, hPos, total, shakerLofi, 0.12, 0.14);
-      addHit(tempR, hPos, total, shakerLofi, 0.14, 0.12);
-    }
-  }
-
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
-    out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
-    out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
-  }
-  return out;
-}
-
-// -------------------------------------------------------------------------
-// TRACK 10: "Midnight Rooftop Breeze" (120.0s Jazzy Lo-Fi EP & Velvet Bass)
-// -------------------------------------------------------------------------
-function generateTrack10() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
-
-  const chords = [
-    [146.83, 185.00, 220.00, 277.18], // Dmaj9
-    [138.59, 164.81, 207.65, 246.94], // C#m7
-    [123.47, 146.83, 185.00, 220.00], // Bm9
-    [110.00, 164.81, 220.00, 277.18], // A13
-    [98.00,  146.83, 196.00, 246.94], // Gmaj9
-    [92.50,  138.59, 174.61, 220.00], // F#m7
-    [82.41,  123.47, 164.81, 196.00], // Em9
-    [110.00, 138.59, 164.81, 220.00], // A7
-  ];
-
-  for (let i = 0; i < total; i++) {
-    const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chords[bar % chords.length];
-
-    const compT = t % 1.0;
-    let rhodes = 0;
-    if (compT < 0.85) {
+      let padL = 0, padR = 0;
       for (let c = 0; c < chord.length; c++) {
-        const tremolo = 1 + 0.08 * Math.sin(2 * Math.PI * 4.5 * t + c);
-        rhodes += (sine(chord[c] * 1.5 * tremolo, compT) * 0.07 + sine(chord[c] * 3.0, compT) * 0.015) * Math.exp(-compT * 3.2);
+        let p = phases[c] + dPhases[c];
+        if (p >= 1) p -= 1;
+        phases[c] = p;
+
+        let pDet = phasesDetune[c] + dPhasesDetune[c];
+        if (pDet >= 1) pDet -= 1;
+        phasesDetune[c] = pDet;
+
+        const tone = oscSin(p) * 0.07 + oscSin(pDet) * 0.04;
+        padL += tone * tremolo;
+        padR += tone * chorus;
+      }
+
+      pBass += dBass;
+      if (pBass >= 1) pBass -= 1;
+      const bassEnv = Math.min(1.0, barNorm * 4.0) * Math.exp(-barNorm * 0.6);
+      const bassTone = (oscSin(pBass) * 0.24 + oscSin((pBass * 2) % 1) * 0.05) * bassEnv;
+
+      tempL[i] += (padL * chordEnv * 0.9) + bassTone;
+      tempR[i] += (padR * chordEnv * 0.9) + bassTone;
+    }
+
+    // Melodic Arpeggio / Lead Notes in this bar
+    if (melodyNotes.length > 0) {
+      const stepsPerBar = leadInstrument === "kalimba" || leadInstrument === "music_box" ? 8 : 4;
+      const stepDuration = barDuration / stepsPerBar;
+
+      for (let s = 0; s < stepsPerBar; s++) {
+        if ((bar + s) % 3 === 2 && (s % 2 === 1)) continue;
+
+        const noteIdx = (bar * 2 + s + (s % 2)) % melodyNotes.length;
+        const noteFreq = melodyNotes[noteIdx];
+        const stepStartSample = barStartSample + Math.floor(s * stepDuration * AUDIO_SAMPLE_RATE);
+        const noteLen = Math.floor(stepDuration * AUDIO_SAMPLE_RATE * 1.8);
+        const maxSample = Math.min(totalSamples, stepStartSample + noteLen);
+
+        const panL = 0.6 + 0.4 * Math.sin(s * 1.3);
+        const panR = 0.6 + 0.4 * Math.cos(s * 1.3);
+        const dNote = noteFreq / AUDIO_SAMPLE_RATE;
+        let pNote = 0;
+
+        let decayRate = 2.4;
+        if (leadInstrument === "kalimba" || leadInstrument === "celeste" || leadInstrument === "music_box") decayRate = 3.6;
+        else if (leadInstrument === "nylon_guitar") decayRate = 2.8;
+        else if (leadInstrument === "flute") decayRate = 1.6;
+
+        for (let j = stepStartSample; j < maxSample; j++) {
+          const noteT = (j - stepStartSample) / AUDIO_SAMPLE_RATE;
+          pNote += dNote;
+          if (pNote >= 1) pNote -= 1;
+
+          let noteSound = 0;
+          if (leadInstrument === "rhodes") {
+            noteSound = (oscSin(pNote) * 0.12 + oscSin((pNote * 2) % 1) * 0.035) * Math.exp(-noteT * decayRate);
+          } else if (leadInstrument === "kalimba" || leadInstrument === "celeste" || leadInstrument === "music_box") {
+            noteSound = (oscSin(pNote) * 0.14 + oscSin((pNote * 3.01) % 1) * 0.04) * Math.exp(-noteT * decayRate);
+          } else if (leadInstrument === "nylon_guitar") {
+            noteSound = (oscSin(pNote) * 0.11 + oscSin((pNote * 1.5) % 1) * 0.03) * Math.exp(-noteT * decayRate);
+          } else if (leadInstrument === "flute") {
+            const breath = (Math.random() * 2 - 1) * 0.015;
+            noteSound = (oscSin(pNote) * 0.13 + breath) * Math.exp(-noteT * decayRate);
+          } else {
+            noteSound = (oscSin(pNote) * 0.13 + oscSin((pNote * 2) % 1) * 0.02) * Math.exp(-noteT * decayRate);
+          }
+
+          tempL[j] += noteSound * panL;
+          tempR[j] += noteSound * panR;
+        }
       }
     }
-
-    let bass = 0;
-    if ((bar >= 4 && bar < 42) || bar >= 46) {
-      const bStep = Math.floor(t / 0.5) % chord.length;
-      const bFreq = chord[bStep] / 2;
-      bass = sine(bFreq, t) * 0.28;
-    }
-
-    const vinyl = (Math.random() > 0.995 ? (Math.random() * 2 - 1) * 0.035 : 0);
-
-    tempL[i] = rhodes * 1.1 + bass + vinyl;
-    tempR[i] = rhodes * 0.9 + bass + vinyl;
   }
 
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 4; bar < 58; bar++) {
-    if (bar >= 42 && bar < 46) continue;
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    addHit(tempL, barStart, total, kickLofi, 0.36, 0.36);
-    addHit(tempR, barStart, total, kickLofi, 0.36, 0.36);
-    addHit(tempL, barStart + beatSamples, total, snareLofi, 0.30, 0.32);
-    addHit(tempR, barStart + beatSamples, total, snareLofi, 0.32, 0.30);
-    addHit(tempL, barStart + beatSamples * 2, total, kickLofi, 0.26, 0.26);
-    addHit(tempR, barStart + beatSamples * 2, total, kickLofi, 0.26, 0.26);
-    addHit(tempL, barStart + beatSamples * 3, total, rimshotLofi, 0.28, 0.30);
-    addHit(tempR, barStart + beatSamples * 3, total, rimshotLofi, 0.30, 0.28);
-    for (let h = 0; h < 4; h++) {
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5);
-      addHit(tempL, hPos, total, hatLofi, 0.12, 0.14);
-      addHit(tempR, hPos, total, hatLofi, 0.14, 0.12);
+  // 3. Sleepy lofi drums
+  if (drumStyle !== "none") {
+    const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * secondsPerBeat);
+    const drumStartBar = 4;
+    const drumEndBar = totalBars - 2;
+
+    for (let b = drumStartBar; b < drumEndBar; b++) {
+      if (b % 12 >= 10) continue; // Ambient breather breakdown
+
+      const barStart = Math.floor(b * barDuration * AUDIO_SAMPLE_RATE);
+
+      if (drumStyle === "sleepy_lofi") {
+        addHit(tempL, barStart, totalSamples, kickSoft, 0.30, 0.30);
+        addHit(tempR, barStart, totalSamples, kickSoft, 0.30, 0.30);
+        const swungBeat3 = barStart + Math.floor(beatSamples * 2.3);
+        addHit(tempL, swungBeat3, totalSamples, kickSoft, 0.22, 0.22);
+        addHit(tempR, swungBeat3, totalSamples, kickSoft, 0.22, 0.22);
+
+        addHit(tempL, barStart + beatSamples, totalSamples, rimSoft, 0.24, 0.26);
+        addHit(tempR, barStart + beatSamples, totalSamples, rimSoft, 0.26, 0.24);
+        addHit(tempL, barStart + beatSamples * 3, totalSamples, snareSoft, 0.20, 0.22);
+        addHit(tempR, barStart + beatSamples * 3, totalSamples, snareSoft, 0.22, 0.20);
+
+        for (let h = 0; h < 4; h++) {
+          const swing = (h % 2 === 1) ? Math.floor(beatSamples * 0.08) : 0;
+          const hPos = barStart + Math.floor(h * beatSamples * 0.5) + swing;
+          addHit(tempL, hPos, totalSamples, hatSoft, 0.09, 0.11);
+          addHit(tempR, hPos, totalSamples, hatSoft, 0.11, 0.09);
+        }
+      } else if (drumStyle === "soft_brushes") {
+        for (let h = 0; h < 4; h++) {
+          addHit(tempL, barStart + h * beatSamples, totalSamples, shakerSoft, 0.12, 0.14);
+          addHit(tempR, barStart + h * beatSamples, totalSamples, shakerSoft, 0.14, 0.12);
+        }
+        addHit(tempL, barStart + beatSamples * 2, totalSamples, rimSoft, 0.18, 0.20);
+        addHit(tempR, barStart + beatSamples * 2, totalSamples, rimSoft, 0.20, 0.18);
+      } else if (drumStyle === "heartbeat") {
+        addHit(tempL, barStart, totalSamples, kickSoft, 0.24, 0.24);
+        addHit(tempR, barStart, totalSamples, kickSoft, 0.24, 0.24);
+        addHit(tempL, barStart + Math.floor(beatSamples * 0.35), totalSamples, kickSoft, 0.16, 0.16);
+        addHit(tempR, barStart + Math.floor(beatSamples * 0.35), totalSamples, kickSoft, 0.16, 0.16);
+      }
     }
   }
 
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
+  // Convert to 16-bit signed PCM with soft limiting
+  const out = new Int16Array(totalSamples * 2);
+  for (let i = 0; i < totalSamples; i++) {
     out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
     out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
   }
@@ -958,192 +327,619 @@ function generateTrack10() {
 }
 
 // -------------------------------------------------------------------------
-// TRACK 11: "Floating in Aurora" (120.0s Ethereal Ambient Synth & Velvet Pads)
+// 30 Smooth Ambient Sleep Music Lo-Fi Track Configurations (3 to 5 Minutes Each)
 // -------------------------------------------------------------------------
-function generateTrack11() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
-
-  const chords = [
-    [174.61, 220.00, 261.63, 329.63], // Fmaj7
-    [196.00, 261.63, 293.66, 392.00], // Gsus4
-    [220.00, 261.63, 329.63, 392.00], // Am7
-    [164.81, 196.00, 246.94, 329.63], // Em7
-    [174.61, 220.00, 261.63, 349.23], // Fmaj9
-    [146.83, 220.00, 261.63, 329.63], // Dm9
-    [196.00, 246.94, 293.66, 329.63], // G6
-    [130.81, 164.81, 196.00, 246.94], // Cmaj7
-  ];
-
-  for (let i = 0; i < total; i++) {
-    const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chords[bar % chords.length];
-
-    const env = 0.5 + 0.5 * Math.sin(2 * Math.PI * 0.10 * t);
-    let choir = 0;
-    for (let c = 0; c < chord.length; c++) {
-      choir += sine(chord[c], t) * 0.035 * env;
-    }
-
-    const mStep = Math.floor(t / 0.25) % chord.length;
-    const mT = t % 0.25;
-    const marimba = (sine(chord[mStep] * 2.0, mT) * 0.12 + sine(chord[mStep] * 4.0, mT) * 0.04) * Math.exp(-mT * 7.0);
-
-    const drone = sine(chord[0] / 2, t) * 0.24;
-    const glint = (Math.sin(2 * Math.PI * 3492 * t) * 0.02) * Math.exp(-(t % 2.0) * 3.0);
-
-    tempL[i] = choir * 1.1 + marimba * 0.8 + drone + glint;
-    tempR[i] = choir * 0.9 + marimba * 1.2 + drone + glint;
-  }
-
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 8; bar < 56; bar++) {
-    if (bar >= 38 && bar < 42) continue;
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    addHit(tempL, barStart, total, kickLofi, 0.30, 0.30);
-    addHit(tempR, barStart, total, kickLofi, 0.30, 0.30);
-    addHit(tempL, barStart + beatSamples * 2, total, rimshotLofi, 0.22, 0.25);
-    addHit(tempR, barStart + beatSamples * 2, total, rimshotLofi, 0.25, 0.22);
-    for (let h = 0; h < 4; h++) {
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5);
-      addHit(tempL, hPos, total, hatLofi, 0.08, 0.10);
-      addHit(tempR, hPos, total, hatLofi, 0.10, 0.08);
-    }
-  }
-
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
-    out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
-    out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
-  }
-  return out;
-}
-
-// -------------------------------------------------------------------------
-// TRACK 12: "Warm Rainy Window" (120.0s Rain Drops & Gentle Acoustic Nylon Guitar)
-// -------------------------------------------------------------------------
-function generateTrack12() {
-  const dur = 120.0;
-  const total = Math.floor(AUDIO_SAMPLE_RATE * dur);
-  const tempL = new Float32Array(total);
-  const tempR = new Float32Array(total);
-
-  const chords = [
-    [146.83, 185.00, 220.00, 293.66], // D
-    [123.47, 146.83, 185.00, 220.00], // Bm7
-    [98.00,  146.83, 196.00, 246.94], // Gmaj7
-    [110.00, 146.83, 164.81, 220.00], // A7sus4
-    [146.83, 185.00, 220.00, 277.18], // Dmaj7
-    [82.41,  123.47, 164.81, 196.00], // Em7
-    [98.00,  146.83, 196.00, 246.94], // G6
-    [146.83, 185.00, 220.00, 293.66], // D
-  ];
-
-  for (let i = 0; i < total; i++) {
-    const t = i / AUDIO_SAMPLE_RATE;
-    const bar = Math.floor(t / 2.0);
-    const chord = chords[bar % chords.length];
-
-    const gStep = Math.floor(t / 0.25) % chord.length;
-    const gT = t % 0.25;
-    const gFreq = chord[gStep] * 1.5;
-    const guitar = (sine(gFreq, gT) * 0.15 + sine(gFreq * 2, gT) * 0.04) * Math.exp(-gT * 7.5);
-
-    let piano = 0;
-    if (bar >= 8) {
-      const melody = [293.66, 329.63, 369.99, 440.00, 493.88, 587.33];
-      const mStep = Math.floor(t / 0.5) % melody.length;
-      const mT = t % 0.5;
-      piano = (sine(melody[mStep], mT) * 0.10 + sine(melody[mStep] * 2, mT) * 0.03) * Math.exp(-mT * 3.0);
-    }
-
-    let bass = 0;
-    if ((bar >= 4 && bar < 42) || bar >= 46) {
-      bass = sine(chord[0] / 2, t) * 0.25;
-    }
-
-    const rain = (Math.random() > 0.993 ? (Math.random() * 2 - 1) * 0.04 : 0);
-
-    tempL[i] = guitar * 1.1 + piano * 0.8 + bass + rain;
-    tempR[i] = guitar * 0.9 + piano * 1.2 + bass + rain;
-  }
-
-  const beatSamples = Math.floor(AUDIO_SAMPLE_RATE * 0.5);
-  for (let bar = 4; bar < 58; bar++) {
-    if (bar >= 42 && bar < 46) continue;
-    const barStart = Math.floor(bar * 2.0 * AUDIO_SAMPLE_RATE);
-    addHit(tempL, barStart, total, kickLofi, 0.34, 0.34);
-    addHit(tempR, barStart, total, kickLofi, 0.34, 0.34);
-    addHit(tempL, barStart + beatSamples, total, rimshotLofi, 0.26, 0.28);
-    addHit(tempR, barStart + beatSamples, total, rimshotLofi, 0.28, 0.26);
-    addHit(tempL, barStart + beatSamples * 2, total, kickLofi, 0.24, 0.24);
-    addHit(tempR, barStart + beatSamples * 2, total, kickLofi, 0.24, 0.24);
-    addHit(tempL, barStart + beatSamples * 3, total, rimshotLofi, 0.28, 0.30);
-    addHit(tempR, barStart + beatSamples * 3, total, rimshotLofi, 0.30, 0.28);
-    for (let h = 0; h < 4; h++) {
-      const hPos = barStart + Math.floor(h * beatSamples * 0.5);
-      addHit(tempL, hPos, total, shakerLofi, 0.12, 0.14);
-      addHit(tempR, hPos, total, shakerLofi, 0.14, 0.12);
-    }
-  }
-
-  const out = new Int16Array(total * 2);
-  for (let i = 0; i < total; i++) {
-    out[i * 2] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempL[i]) * 24000)));
-    out[i * 2 + 1] = Math.max(-32767, Math.min(32767, Math.round(softClip(tempR[i]) * 24000)));
-  }
-  return out;
-}
-
-// -------------------------------------------------------------------------
-// Built-in Calm Lo-Fi Track Playlist
-// -------------------------------------------------------------------------
-export const BUILTIN_TRACKS = [
-  { id: 1, name: "Rainy Tokyo Coffeehouse", genre: "Chillhop & Rhodes (120s)", generate: generateTrack1, pcm: null },
-  { id: 2, name: "Midnight Study Sanctuary", genre: "Acoustic Lofi & Bass (120s)", generate: generateTrack2, pcm: null },
-  { id: 3, name: "Golden Hour Sakura Garden", genre: "Oriental Zen Lofi (120s)", generate: generateTrack3, pcm: null },
-  { id: 4, name: "Lavender Clouds Sunset", genre: "Dreamhop & Kalimba (120s)", generate: generateTrack4, pcm: null },
-  { id: 5, name: "Midnight Bookshop & Tea", genre: "Nostalgic Jazzhop (120s)", generate: generateTrack5, pcm: null },
-  { id: 6, name: "Starry Night Sleepscape", genre: "Deep Ambient Piano (120s)", generate: generateTrack6, pcm: null },
-  { id: 7, name: "Cozy Fireside Solitude", genre: "Warm Acoustic Lofi (120s)", generate: generateTrack7, pcm: null },
-  { id: 8, name: "Distant Ocean Memories", genre: "Ethereal Seaside Lofi (120s)", generate: generateTrack8, pcm: null },
-  { id: 9, name: "Moonlit Forest Canopy", genre: "Ambient Flute & Chimes (120s)", generate: generateTrack9, pcm: null },
-  { id: 10, name: "Midnight Rooftop Breeze", genre: "Jazzy Lo-Fi EP & Bass (120s)", generate: generateTrack10, pcm: null },
-  { id: 11, name: "Floating in Aurora", genre: "Ethereal Ambient Synth (120s)", generate: generateTrack11, pcm: null },
-  { id: 12, name: "Warm Rainy Window", genre: "Rain & Nylon Guitar (120s)", generate: generateTrack12, pcm: null },
+export const TRACK_SPECS = [
+  // Track 1 (240s / 4:00)
+  {
+    id: 1,
+    name: "Deep Theta Sleepscape",
+    genre: "Theta Drone & Rhodes (240s)",
+    durationSec: 240,
+    bpm: 58,
+    chords: [
+      [130.81, 164.81, 196.00, 246.94, 293.66], // Cmaj9
+      [110.00, 164.81, 220.00, 261.63, 329.63], // Am9
+      [174.61, 220.00, 246.94, 329.63],         // Fmaj7#11
+      [196.00, 261.63, 293.66, 329.63, 440.00], // G13sus
+    ],
+    melodyNotes: [329.63, 392.00, 440.00, 523.25, 587.33, 659.25],
+    leadInstrument: "rhodes",
+    padStyle: "deep_theta",
+    ambientBed: "rain",
+    drumStyle: "heartbeat",
+  },
+  // Track 2 (210s / 3:30)
+  {
+    id: 2,
+    name: "Midnight Rain in Kyoto",
+    genre: "Felt Piano & Rain (210s)",
+    durationSec: 210,
+    bpm: 62,
+    chords: [
+      [155.56, 196.00, 233.08, 293.66, 349.23], // Ebmaj9
+      [130.81, 196.00, 233.08, 293.66, 311.13], // Cm9
+      [207.65, 261.63, 311.13, 392.00],         // Abmaj7
+      [233.08, 311.13, 349.23, 392.00],         // Bb9sus
+    ],
+    melodyNotes: [311.13, 349.23, 392.00, 466.16, 523.25],
+    leadInstrument: "felt_piano",
+    padStyle: "warm_analog",
+    ambientBed: "rain",
+    drumStyle: "sleepy_lofi",
+  },
+  // Track 3 (270s / 4:30)
+  {
+    id: 3,
+    name: "Starlit Lavender Clouds",
+    genre: "Dreamhop & Kalimba (270s)",
+    durationSec: 270,
+    bpm: 56,
+    chords: [
+      [146.83, 185.00, 220.00, 277.18, 329.63], // Dmaj9
+      [123.47, 185.00, 220.00, 277.18, 293.66], // Bm11
+      [196.00, 246.94, 293.66, 369.99, 440.00], // Gmaj9
+      [220.00, 277.18, 329.63, 369.99, 440.00], // A6/9
+    ],
+    melodyNotes: [369.99, 440.00, 493.88, 554.37, 659.25],
+    leadInstrument: "kalimba",
+    padStyle: "celestial_shimmer",
+    ambientBed: "wind",
+    drumStyle: "soft_brushes",
+  },
+  // Track 4 (180s / 3:00)
+  {
+    id: 4,
+    name: "Warm Wool Blanket & Tea",
+    genre: "Cozy Guitar & Mellow Beats (180s)",
+    durationSec: 180,
+    bpm: 65,
+    chords: [
+      [174.61, 220.00, 261.63, 329.63, 392.00], // Fmaj9
+      [146.83, 220.00, 261.63, 329.63],         // Dm9
+      [233.08, 293.66, 349.23, 440.00],         // Bbmaj7
+      [130.81, 207.65, 261.63, 311.13, 392.00], // C7alt
+    ],
+    melodyNotes: [261.63, 293.66, 329.63, 392.00, 440.00, 523.25],
+    leadInstrument: "nylon_guitar",
+    padStyle: "warm_analog",
+    ambientBed: "fireplace",
+    drumStyle: "sleepy_lofi",
+  },
+  // Track 5 (300s / 5:00)
+  {
+    id: 5,
+    name: "Bioluminescent Ocean Tide",
+    genre: "Ocean Ambient Drift (300s)",
+    durationSec: 300,
+    bpm: 52,
+    chords: [
+      [207.65, 261.63, 311.13, 392.00, 466.16], // Abmaj9
+      [174.61, 261.63, 311.13, 392.00, 415.30], // Fm11
+      [138.59, 207.65, 261.63, 311.13, 392.00], // Dbmaj9
+      [155.56, 233.08, 311.13, 349.23, 415.30], // Eb11
+    ],
+    melodyNotes: [311.13, 349.23, 392.00, 415.30, 466.16, 523.25],
+    leadInstrument: "celeste",
+    padStyle: "lush_silk",
+    ambientBed: "ocean",
+    drumStyle: "none",
+  },
+  // Track 6 (240s / 4:00)
+  {
+    id: 6,
+    name: "Weightless in Zero Gravity",
+    genre: "Cosmic Glass & Sub (240s)",
+    durationSec: 240,
+    bpm: 54,
+    chords: [
+      [196.00, 246.94, 293.66, 369.99],         // Gmaj7
+      [164.81, 246.94, 293.66, 369.99, 392.00], // Em9
+      [130.81, 196.00, 246.94, 293.66, 392.00], // Cmaj9
+      [146.83, 220.00, 293.66, 329.63, 392.00], // D9sus
+    ],
+    melodyNotes: [369.99, 392.00, 440.00, 493.88, 587.33],
+    leadInstrument: "music_box",
+    padStyle: "celestial_shimmer",
+    ambientBed: "wind",
+    drumStyle: "none",
+  },
+  // Track 7 (210s / 3:30)
+  {
+    id: 7,
+    name: "Moonlit Forest Canopy",
+    genre: "Zen Flute & Crickets (210s)",
+    durationSec: 210,
+    bpm: 60,
+    chords: [
+      [123.47, 185.00, 220.00, 277.18, 329.63], // Bm9
+      [196.00, 246.94, 293.66, 369.99],         // Gmaj7
+      [164.81, 220.00, 246.94, 293.66, 392.00], // Em9
+      [185.00, 220.00, 277.18, 329.63],         // F#m7
+    ],
+    melodyNotes: [277.18, 329.63, 369.99, 440.00, 493.88],
+    leadInstrument: "flute",
+    padStyle: "warm_analog",
+    ambientBed: "crickets",
+    drumStyle: "soft_brushes",
+  },
+  // Track 8 (260s / 4:20)
+  {
+    id: 8,
+    name: "Cozy Fireside Whispers",
+    genre: "Fireside Guitar & Rhodes (260s)",
+    durationSec: 260,
+    bpm: 64,
+    chords: [
+      [116.54, 174.61, 220.00, 261.63, 329.63], // Bbmaj9
+      [196.00, 261.63, 293.66, 349.23],         // Gm9
+      [155.56, 233.08, 293.66, 349.23],         // Ebmaj7
+      [174.61, 261.63, 329.63, 349.23, 392.00], // F11
+    ],
+    melodyNotes: [261.63, 293.66, 349.23, 392.00, 440.00],
+    leadInstrument: "rhodes",
+    padStyle: "warm_analog",
+    ambientBed: "fireplace",
+    drumStyle: "sleepy_lofi",
+  },
+  // Track 9 (195s / 3:15)
+  {
+    id: 9,
+    name: "Slumbering in the Mist",
+    genre: "Ambient Mist & Felt Piano (195s)",
+    durationSec: 195,
+    bpm: 59,
+    chords: [
+      [185.00, 220.00, 277.18, 329.63, 415.30], // F#m9
+      [146.83, 220.00, 277.18, 369.99],         // Dmaj7
+      [123.47, 185.00, 220.00, 277.18, 293.66], // Bm11
+      [138.59, 207.65, 277.18, 329.63],         // C#m7
+    ],
+    melodyNotes: [277.18, 329.63, 369.99, 415.30, 493.88],
+    leadInstrument: "felt_piano",
+    padStyle: "deep_theta",
+    ambientBed: "rain",
+    drumStyle: "heartbeat",
+  },
+  // Track 10 (280s / 4:40)
+  {
+    id: 10,
+    name: "Floating Through Aurora",
+    genre: "Aurora Synths & Sub (280s)",
+    durationSec: 280,
+    bpm: 55,
+    chords: [
+      [164.81, 207.65, 246.94, 311.13, 369.99], // Emaj9
+      [138.59, 207.65, 246.94, 311.13, 329.63], // C#m9
+      [220.00, 277.18, 311.13, 392.00],         // Amaj7#11
+      [246.94, 329.63, 369.99, 440.00],         // Bsus4
+    ],
+    melodyNotes: [329.63, 369.99, 415.30, 493.88, 554.37],
+    leadInstrument: "celeste",
+    padStyle: "celestial_shimmer",
+    ambientBed: "wind",
+    drumStyle: "none",
+  },
+  // Track 11 (180s / 3:00)
+  {
+    id: 11,
+    name: "Sleepy Cat on the Sill",
+    genre: "Purring Lofi & Rhodes (180s)",
+    durationSec: 180,
+    bpm: 68,
+    chords: [
+      [130.81, 164.81, 196.00, 246.94, 293.66], // Cmaj9
+      [174.61, 220.00, 261.63, 329.63, 392.00], // Fmaj9
+      [146.83, 220.00, 261.63, 329.63],         // Dm9
+      [196.00, 246.94, 293.66, 329.63, 440.00], // G13
+    ],
+    melodyNotes: [261.63, 293.66, 329.63, 392.00, 440.00, 523.25],
+    leadInstrument: "rhodes",
+    padStyle: "warm_analog",
+    ambientBed: "vinyl",
+    drumStyle: "sleepy_lofi",
+  },
+  // Track 12 (225s / 3:45)
+  {
+    id: 12,
+    name: "Lucid Twilight Reverie",
+    genre: "Binaural Strings & Music Box (225s)",
+    durationSec: 225,
+    bpm: 57,
+    chords: [
+      [110.00, 164.81, 220.00, 277.18, 329.63], // Amaj9
+      [185.00, 220.00, 277.18, 329.63, 369.99], // F#m9
+      [146.83, 220.00, 277.18, 369.99],         // Dmaj7
+      [164.81, 246.94, 293.66, 329.63, 392.00], // E9
+    ],
+    melodyNotes: [277.18, 329.63, 369.99, 440.00, 493.88],
+    leadInstrument: "music_box",
+    padStyle: "lush_silk",
+    ambientBed: "rain",
+    drumStyle: "none",
+  },
+  // Track 13 (300s / 5:00)
+  {
+    id: 13,
+    name: "Distant Lighthouse Beacon",
+    genre: "Deep Sea Fog & Drone (300s)",
+    durationSec: 300,
+    bpm: 52,
+    chords: [
+      [146.83, 220.00, 261.63, 329.63, 349.23], // Dm9
+      [116.54, 174.61, 220.00, 261.63],         // Bbmaj7
+      [196.00, 261.63, 293.66, 349.23],         // Gm9
+      [220.00, 293.66, 329.63, 440.00],         // Asus4
+    ],
+    melodyNotes: [261.63, 293.66, 329.63, 349.23, 440.00],
+    leadInstrument: "rhodes",
+    padStyle: "deep_theta",
+    ambientBed: "ocean",
+    drumStyle: "heartbeat",
+  },
+  // Track 14 (210s / 3:30)
+  {
+    id: 14,
+    name: "Raindrops on Bamboo",
+    genre: "Bamboo Kalimba & Rain (210s)",
+    durationSec: 210,
+    bpm: 63,
+    chords: [
+      [196.00, 246.94, 293.66, 369.99, 440.00], // Gmaj9
+      [164.81, 220.00, 246.94, 293.66, 392.00], // Em11
+      [130.81, 164.81, 196.00, 246.94],         // Cmaj7
+      [146.83, 220.00, 246.94, 293.66, 369.99], // D13
+    ],
+    melodyNotes: [293.66, 329.63, 369.99, 440.00, 493.88],
+    leadInstrument: "kalimba",
+    padStyle: "warm_analog",
+    ambientBed: "rain",
+    drumStyle: "soft_brushes",
+  },
+  // Track 15 (270s / 4:30)
+  {
+    id: 15,
+    name: "Nebula Lullaby 432Hz",
+    genre: "432Hz Celestial Sleep (270s)",
+    durationSec: 270,
+    bpm: 54,
+    chords: [
+      [138.59, 207.65, 277.18, 311.13, 329.63], // C#m9
+      [220.00, 277.18, 329.63, 415.30],         // Amaj7
+      [185.00, 220.00, 277.18, 329.63],         // F#m9
+      [207.65, 246.94, 311.13, 369.99],         // G#m7
+    ],
+    melodyNotes: [277.18, 311.13, 329.63, 415.30, 493.88],
+    leadInstrument: "singing_bowl",
+    padStyle: "celestial_shimmer",
+    ambientBed: "wind",
+    drumStyle: "none",
+  },
+  // Track 16 (240s / 4:00)
+  {
+    id: 16,
+    name: "Silent Midnight Snowfall",
+    genre: "Felt Piano Snowfall (240s)",
+    durationSec: 240,
+    bpm: 56,
+    chords: [
+      [174.61, 220.00, 261.63, 329.63],         // Fmaj7
+      [116.54, 174.61, 220.00, 261.63],         // Bbmaj7
+      [146.83, 220.00, 261.63, 329.63],         // Dm9
+      [130.81, 164.81, 196.00, 220.00, 293.66], // C6/9
+    ],
+    melodyNotes: [261.63, 293.66, 329.63, 349.23, 440.00],
+    leadInstrument: "felt_piano",
+    padStyle: "lush_silk",
+    ambientBed: "wind",
+    drumStyle: "soft_brushes",
+  },
+  // Track 17 (195s / 3:15)
+  {
+    id: 17,
+    name: "Warm Herbal Tea Dreams",
+    genre: "Neo-Soul Lofi Chords (195s)",
+    durationSec: 195,
+    bpm: 65,
+    chords: [
+      [155.56, 196.00, 233.08, 293.66, 349.23], // Ebmaj9
+      [207.65, 261.63, 311.13, 392.00],         // Abmaj7
+      [174.61, 261.63, 311.13, 349.23, 415.30], // Fm9
+      [233.08, 311.13, 349.23, 415.30],         // Bb11
+    ],
+    melodyNotes: [293.66, 311.13, 349.23, 392.00, 466.16],
+    leadInstrument: "nylon_guitar",
+    padStyle: "warm_analog",
+    ambientBed: "fireplace",
+    drumStyle: "sleepy_lofi",
+  },
+  // Track 18 (225s / 3:45)
+  {
+    id: 18,
+    name: "Gentle River at Dusk",
+    genre: "River Brook & Flute (225s)",
+    durationSec: 225,
+    bpm: 60,
+    chords: [
+      [146.83, 185.00, 220.00, 277.18, 329.63], // Dmaj9
+      [196.00, 246.94, 293.66, 369.99],         // Gmaj7
+      [164.81, 246.94, 293.66, 369.99],         // Em9
+      [220.00, 293.66, 329.63, 440.00],         // A7sus
+    ],
+    melodyNotes: [277.18, 293.66, 329.63, 369.99, 440.00],
+    leadInstrument: "flute",
+    padStyle: "warm_analog",
+    ambientBed: "stream",
+    drumStyle: "soft_brushes",
+  },
+  // Track 19 (290s / 4:50)
+  {
+    id: 19,
+    name: "Submerged in Warm Waters",
+    genre: "Underwater Sub Resonance (290s)",
+    durationSec: 290,
+    bpm: 50,
+    chords: [
+      [207.65, 261.63, 311.13, 392.00],         // Abmaj7
+      [138.59, 207.65, 261.63, 311.13, 392.00], // Dbmaj9
+      [116.54, 174.61, 207.65, 261.63, 311.13], // Bbm9
+      [155.56, 233.08, 293.66, 311.13, 392.00], // Eb9
+    ],
+    melodyNotes: [261.63, 311.13, 349.23, 392.00, 466.16],
+    leadInstrument: "rhodes",
+    padStyle: "deep_theta",
+    ambientBed: "ocean",
+    drumStyle: "none",
+  },
+  // Track 20 (210s / 3:30)
+  {
+    id: 20,
+    name: "Golden Embers in the Dark",
+    genre: "Hearthside Acoustic Lofi (210s)",
+    durationSec: 210,
+    bpm: 64,
+    chords: [
+      [110.00, 164.81, 220.00, 261.63, 329.63], // Am9
+      [174.61, 220.00, 261.63, 329.63],         // Fmaj7
+      [146.83, 220.00, 261.63, 329.63],         // Dm9
+      [164.81, 196.00, 246.94, 293.66],         // Em7
+    ],
+    melodyNotes: [220.00, 261.63, 293.66, 329.63, 392.00],
+    leadInstrument: "nylon_guitar",
+    padStyle: "warm_analog",
+    ambientBed: "fireplace",
+    drumStyle: "sleepy_lofi",
+  },
+  // Track 21 (300s / 5:00)
+  {
+    id: 21,
+    name: "Himalayan Singing Bowls & Sleep",
+    genre: "Tibetan Bowls & Theta (300s)",
+    durationSec: 300,
+    bpm: 50,
+    chords: [
+      [164.81, 246.94, 329.63, 440.00],
+      [146.83, 220.00, 293.66, 440.00],
+      [130.81, 196.00, 261.63, 392.00],
+      [185.00, 277.18, 369.99, 440.00],
+    ],
+    melodyNotes: [246.94, 293.66, 329.63, 392.00, 440.00],
+    leadInstrument: "singing_bowl",
+    padStyle: "deep_theta",
+    ambientBed: "wind",
+    drumStyle: "none",
+  },
+  // Track 22 (180s / 3:00)
+  {
+    id: 22,
+    name: "Midnight Attic Memories",
+    genre: "Vintage Vinyl Beat & Rhodes (180s)",
+    durationSec: 180,
+    bpm: 67,
+    chords: [
+      [116.54, 174.61, 220.00, 261.63, 329.63], // Bbmaj9
+      [146.83, 220.00, 261.63, 329.63],         // Dm7
+      [155.56, 233.08, 293.66, 349.23],         // Ebmaj7
+      [174.61, 220.00, 261.63, 311.13, 392.00], // F7
+    ],
+    melodyNotes: [261.63, 293.66, 329.63, 349.23, 440.00],
+    leadInstrument: "rhodes",
+    padStyle: "warm_analog",
+    ambientBed: "rain",
+    drumStyle: "sleepy_lofi",
+  },
+  // Track 23 (255s / 4:15)
+  {
+    id: 23,
+    name: "Drifting Past the Moon",
+    genre: "Space Ambient Celeste (255s)",
+    durationSec: 255,
+    bpm: 56,
+    chords: [
+      [196.00, 246.94, 293.66, 369.99, 440.00], // Gmaj9
+      [130.81, 164.81, 196.00, 246.94],         // Cmaj7
+      [110.00, 164.81, 220.00, 261.63, 329.63], // Am9
+      [146.83, 220.00, 293.66, 369.99],         // D9sus
+    ],
+    melodyNotes: [293.66, 329.63, 369.99, 440.00, 493.88],
+    leadInstrument: "celeste",
+    padStyle: "celestial_shimmer",
+    ambientBed: "wind",
+    drumStyle: "heartbeat",
+  },
+  // Track 24 (225s / 3:45)
+  {
+    id: 24,
+    name: "Whispering Pine Trees",
+    genre: "Night Forest & Crickets (225s)",
+    durationSec: 225,
+    bpm: 60,
+    chords: [
+      [123.47, 185.00, 220.00, 277.18, 329.63], // Bm9
+      [164.81, 220.00, 246.94, 293.66, 392.00], // Em9
+      [196.00, 246.94, 293.66, 369.99],         // Gmaj7
+      [220.00, 277.18, 329.63, 369.99],         // A6
+    ],
+    melodyNotes: [277.18, 293.66, 329.63, 369.99, 440.00],
+    leadInstrument: "nylon_guitar",
+    padStyle: "warm_analog",
+    ambientBed: "crickets",
+    drumStyle: "soft_brushes",
+  },
+  // Track 25 (240s / 4:00)
+  {
+    id: 25,
+    name: "Celestial Music Box",
+    genre: "Antique Music Box Lullaby (240s)",
+    durationSec: 240,
+    bpm: 58,
+    chords: [
+      [130.81, 164.81, 196.00, 246.94, 293.66], // Cmaj9
+      [164.81, 196.00, 246.94, 293.66, 369.99], // Em9
+      [174.61, 220.00, 261.63, 329.63],         // Fmaj7
+      [196.00, 246.94, 293.66, 349.23, 440.00], // G9
+    ],
+    melodyNotes: [329.63, 392.00, 440.00, 523.25, 587.33],
+    leadInstrument: "music_box",
+    padStyle: "lush_silk",
+    ambientBed: "vinyl",
+    drumStyle: "none",
+  },
+  // Track 26 (270s / 4:30)
+  {
+    id: 26,
+    name: "Sleepy Harbor Fog",
+    genre: "Misty Harbor & Rhodes (270s)",
+    durationSec: 270,
+    bpm: 53,
+    chords: [
+      [146.83, 220.00, 261.63, 329.63, 349.23], // Dm9
+      [196.00, 261.63, 293.66, 349.23, 392.00], // Gm9
+      [116.54, 174.61, 220.00, 261.63],         // Bbmaj7
+      [130.81, 196.00, 246.94, 293.66, 349.23], // C9
+    ],
+    melodyNotes: [261.63, 293.66, 329.63, 349.23, 392.00],
+    leadInstrument: "rhodes",
+    padStyle: "deep_theta",
+    ambientBed: "ocean",
+    drumStyle: "heartbeat",
+  },
+  // Track 27 (195s / 3:15)
+  {
+    id: 27,
+    name: "Velvet Night Oasis",
+    genre: "Silk Neo-Soul & Felt (195s)",
+    durationSec: 195,
+    bpm: 66,
+    chords: [
+      [155.56, 196.00, 233.08, 293.66, 349.23], // Ebmaj9
+      [130.81, 196.00, 233.08, 293.66, 349.23], // Cm11
+      [207.65, 261.63, 311.13, 392.00, 466.16], // Abmaj9
+      [233.08, 311.13, 349.23, 392.00, 466.16], // Bb13
+    ],
+    melodyNotes: [293.66, 311.13, 349.23, 392.00, 466.16],
+    leadInstrument: "felt_piano",
+    padStyle: "warm_analog",
+    ambientBed: "vinyl",
+    drumStyle: "sleepy_lofi",
+  },
+  // Track 28 (285s / 4:45)
+  {
+    id: 28,
+    name: "Solitude in the Clouds",
+    genre: "Cloud Drift & Kalimba (285s)",
+    durationSec: 285,
+    bpm: 52,
+    chords: [
+      [174.61, 220.00, 261.63, 329.63, 392.00], // Fmaj9
+      [110.00, 164.81, 220.00, 261.63, 329.63], // Am9
+      [116.54, 174.61, 220.00, 261.63],         // Bbmaj7
+      [130.81, 196.00, 246.94, 293.66, 349.23], // C9
+    ],
+    melodyNotes: [261.63, 329.63, 392.00, 440.00, 523.25],
+    leadInstrument: "kalimba",
+    padStyle: "celestial_shimmer",
+    ambientBed: "wind",
+    drumStyle: "none",
+  },
+  // Track 29 (300s / 5:00)
+  {
+    id: 29,
+    name: "Deep REM Sleep Wave",
+    genre: "Delta Harmonic Sleep Bed (300s)",
+    durationSec: 300,
+    bpm: 50,
+    chords: [
+      [207.65, 261.63, 311.13, 392.00, 466.16], // Abmaj9
+      [174.61, 246.94, 261.63, 311.13, 349.23], // Fm9
+      [138.59, 207.65, 261.63, 311.13],         // Dbmaj7
+      [155.56, 233.08, 311.13, 349.23, 415.30], // Eb11
+    ],
+    melodyNotes: [261.63, 311.13, 349.23, 392.00, 466.16],
+    leadInstrument: "singing_bowl",
+    padStyle: "deep_theta",
+    ambientBed: "rain",
+    drumStyle: "heartbeat",
+  },
+  // Track 30 (210s / 3:30)
+  {
+    id: 30,
+    name: "Peaceful Dawn Awakening",
+    genre: "Morning Mist & Acoustic Lofi (210s)",
+    durationSec: 210,
+    bpm: 62,
+    chords: [
+      [146.83, 185.00, 220.00, 277.18, 329.63], // Dmaj9
+      [196.00, 246.94, 293.66, 369.99, 440.00], // Gmaj9
+      [123.47, 185.00, 220.00, 277.18, 293.66], // Bm9
+      [220.00, 277.18, 329.63, 369.99, 440.00], // A6/9
+    ],
+    melodyNotes: [277.18, 293.66, 329.63, 369.99, 440.00],
+    leadInstrument: "felt_piano",
+    padStyle: "warm_analog",
+    ambientBed: "crickets",
+    drumStyle: "soft_brushes",
+  },
 ];
 
-export const generators = {
-  1: generateTrack1,
-  2: generateTrack2,
-  3: generateTrack3,
-  4: generateTrack4,
-  5: generateTrack5,
-  6: generateTrack6,
-  7: generateTrack7,
-  8: generateTrack8,
-  9: generateTrack9,
-  10: generateTrack10,
-  11: generateTrack11,
-  12: generateTrack12,
-};
+// -------------------------------------------------------------------------
+// Generator mapping for all 30 tracks
+// -------------------------------------------------------------------------
+export const generators = {};
+for (const spec of TRACK_SPECS) {
+  generators[spec.id] = () => synthesizeAmbientSleepTrack(spec);
+}
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+// -------------------------------------------------------------------------
+// Built-in 30-Track Ambient Sleep Lo-Fi Playlist
+// -------------------------------------------------------------------------
+export const BUILTIN_TRACKS = TRACK_SPECS.map(spec => ({
+  id: spec.id,
+  name: spec.name,
+  genre: spec.genre,
+  durationSec: spec.durationSec,
+  generate: generators[spec.id],
+  pcm: null,
+}));
 
 export function getTrackPcm(track) {
   if (!track) return null;
   if (track.pcm) return track.pcm;
 
-  // 1. Check disk cache (loads in 2ms!)
+  // Free all other tracks from RAM so only the active playing track occupies memory (~40MB instead of 1.2GB!)
+  for (const t of BUILTIN_TRACKS) {
+    if (t.id !== track.id && t.pcm) {
+      t.pcm = null;
+    }
+  }
+
+  // 1. Check disk cache (loads in <2ms)
   const cachePath = resolve(`data/audio-cache/track-${track.id}.pcm`);
   if (existsSync(cachePath)) {
     try {
       const buf = readFileSync(cachePath);
       track.pcm = new Int16Array(buf.buffer, buf.byteOffset, buf.byteLength / 2);
-      console.log(`[audio] loaded Track ${track.id}: "${track.name}" from disk cache in <2ms`);
+      console.log(`[audio] loaded Track ${track.id}: "${track.name}" from disk cache in <2ms (RAM lean)`);
       return track.pcm;
     } catch (e) {
       console.warn(`[audio] disk cache read error for Track ${track.id}:`, e.message);
@@ -1151,16 +947,16 @@ export function getTrackPcm(track) {
   }
 
   // 2. Non-blocking safeguard: if running in live stream, return Track 1 so event loop NEVER freezes
-  if (BUILTIN_TRACKS[0]?.pcm) {
+  if (BUILTIN_TRACKS[0]?.pcm && track.id !== 1) {
     console.warn(`[audio] Track ${track.id} not in memory; playing Track 1 (zero drop safeguard)`);
     return BUILTIN_TRACKS[0].pcm;
   }
 
-  // 3. Fallback generation (initial startup only)
+  // 3. Fallback generation (initial startup or worker only)
   if (track.generate) {
     const t0 = performance.now();
     track.pcm = track.generate();
-    console.log(`[audio] synthesized 120s track ${track.id}: "${track.name}" in ${(performance.now() - t0).toFixed(0)}ms`);
+    console.log(`[audio] synthesized ${track.durationSec || 240}s track ${track.id}: "${track.name}" in ${(performance.now() - t0).toFixed(0)}ms`);
     try {
       const cacheDir = resolve("data/audio-cache");
       if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true });
@@ -1175,24 +971,19 @@ export function startBackgroundAudioWorker() {
   try {
     const workerPath = fileURLToPath(new URL("./audio-worker.mjs", import.meta.url));
     const worker = new Worker(workerPath);
-    let queue = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    // Queue remaining tracks (2 through 30) for smooth background worker pre-generation
+    let queue = Array.from({ length: BUILTIN_TRACKS.length - 1 }, (_, i) => i + 2);
 
     function next() {
       if (queue.length === 0) {
         worker.terminate();
-        console.log("[audio] all background music tracks verified on background worker thread");
+        console.log(`[audio] all ${BUILTIN_TRACKS.length} background sleep music tracks verified & cached on disk`);
         return;
       }
       const nextId = queue.shift();
       const cached = resolve(`data/audio-cache/track-${nextId}.pcm`);
       if (existsSync(cached)) {
-        try {
-          const track = BUILTIN_TRACKS.find(t => t.id === nextId);
-          if (track && !track.pcm) {
-            const buf = readFileSync(cached);
-            track.pcm = new Int16Array(buf.buffer, buf.byteOffset, buf.byteLength / 2);
-          }
-        } catch {}
+        // Disk cache ready — keep out of RAM until played!
         next();
       } else {
         worker.postMessage({ cmd: "generate", id: nextId });
@@ -1205,13 +996,13 @@ export function startBackgroundAudioWorker() {
       } else if (msg.type === "track_pcm") {
         const track = BUILTIN_TRACKS.find(t => t.id === msg.id);
         if (track) {
-          track.pcm = new Int16Array(msg.pcm);
-          console.log(`[audio] background worker ready: Track ${track.id} ("${track.name}")`);
+          console.log(`[audio] background worker ready: Track ${track.id} ("${track.name}") cached on disk`);
           try {
             const cacheDir = resolve("data/audio-cache");
             if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true });
             writeFileSync(resolve(`data/audio-cache/track-${track.id}.pcm`), Buffer.from(msg.pcm));
           } catch {}
+          // Keep out of RAM until needed
         }
         next();
       }
@@ -1229,7 +1020,7 @@ if (isMainThread) {
   // Pre-load Track 1 from cache (<2ms)
   getTrackPcm(BUILTIN_TRACKS[0]);
 
-  // Pre-load remaining tracks from cache
+  // Pre-load remaining tracks from cache or generate asynchronously on worker thread
   startBackgroundAudioWorker();
 }
 

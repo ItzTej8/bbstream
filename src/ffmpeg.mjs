@@ -93,10 +93,10 @@ export function createEncoder() {
     );
   } else {
     const detectedCpus = os.cpus()?.length || 2;
-    // On low-end Linux VPS, allow x264 to utilize multi-threaded slice encoding with fast lookahead
+    // On low-end Linux VPS (4 vCPUs with 3 Skia workers), allocate 2 threads for x264 ultrafast encoding
     const x264Threads = config.encoderThreads > 0
       ? config.encoderThreads
-      : Math.max(2, Math.min(8, detectedCpus));
+      : (detectedCpus <= 4 ? 2 : Math.max(2, Math.min(8, detectedCpus - 2)));
     const slices = Math.max(1, Math.min(4, Math.floor(x264Threads / 2) || 1));
     args.push(
       "-c:v", "libx264",

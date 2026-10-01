@@ -15,14 +15,14 @@ const clients = new Set();
 const rawClients = new Set();
 const audioClients = new Set();
 const RAW_BUF_SIZE = (config.renderWidth || 720) * (config.renderHeight || 1280) * 4;
-const rawFramePool = Array.from({ length: 8 }, () => Buffer.alloc(RAW_BUF_SIZE));
-let rawPoolIndex = 0;
 
 // --- Audio Synthesizer & Real-time Mixer ---
 const AUDIO_SAMPLE_RATE = 44100;
 const INITIAL_BUFFER_SECONDS = 0;
 const INITIAL_BUFFER_SAMPLES = Math.floor(AUDIO_SAMPLE_RATE * INITIAL_BUFFER_SECONDS);
 const silencePool = Buffer.alloc(AUDIO_SAMPLE_RATE * 2 * 4); // 2 seconds pre-allocated silence
+const reusableAudioChunkPcm = new Int16Array(AUDIO_SAMPLE_RATE * 2);
+const reusableAudioChunkBuf = Buffer.from(reusableAudioChunkPcm.buffer);
 
 // Pre-synthesize celebratory Golden Fanfare Chime for votes
 const VOTE_FANFARE_DURATION = 1.1;
@@ -857,19 +857,21 @@ function sendAudioFrame(forcedSamples = 0) {
   totalAudioSamplesSent += neededSamples;
   lastAudioSentAt = Date.now();
 
-  // Auto-advance track sequentially if loop mode is "loop" (every 3 minutes)
-  if (trackLoopMode === "loop" && (Date.now() - lastTrackAdvanceAt > autoAdvanceIntervalMs)) {
-    lastTrackAdvanceAt = Date.now();
-    nextMusicTrack();
-  }
-
-  const chunkPcm = new Int16Array(neededSamples * 2);
   const musicOn = isMusicEnabled();
   const curTrack = MUSIC_TRACKS[currentTrackIndex] || MUSIC_TRACKS[0];
   const curPcm = curTrack ? getTrackPcm(curTrack) : null;
   const trackSamples = curPcm ? ((curPcm.length / 2) | 0) : 0;
   const isTtsDucking = Date.now() < ttsActiveUntil;
   const curBgVol = isTtsDucking ? (bgMusicVolume * 0.22) : bgMusicVolume;
+
+  // Auto-advance track sequentially when its full duration has completed in "loop" mode
+  const curTrackDurationMs = (curTrack?.durationSec ? curTrack.durationSec * 1000 : autoAdvanceIntervalMs);
+  if (trackLoopMode === "loop" && (Date.now() - lastTrackAdvanceAt > curTrackDurationMs)) {
+    lastTrackAdvanceAt = Date.now();
+    nextMusicTrack();
+  }
+
+  const chunkPcm = reusableAudioChunkPcm;
 
   for (let i = 0; i < neededSamples; i++) {
     let sumL = 0, sumR = 0;
@@ -899,7 +901,7 @@ function sendAudioFrame(forcedSamples = 0) {
   }
 
   activeSounds = activeSounds.filter(snd => snd.offset < snd.pcm.length);
-  const chunkBuf = Buffer.from(chunkPcm.buffer);
+  const chunkBuf = reusableAudioChunkBuf.subarray(0, neededSamples * 4);
 
   for (const client of [...audioClients]) {
     if (client.closed || !client.res.writable) {

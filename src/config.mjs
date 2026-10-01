@@ -11,15 +11,13 @@ const width=output.width,height=output.height;
 const renderWidth=Math.min(width,render.width),renderHeight=Math.min(height,render.height);
 let codec=String(process.env.VIDEO_CODEC||"libx264").trim();
 if(process.platform!=="win32"&&codec==="h264_mf") codec="libx264";
-const detectedCpus = Math.max(1, os.cpus()?.length || 2);
-const autoWorkers = detectedCpus <= 2 ? Math.min(2, detectedCpus) : Math.max(2, Math.min(4, detectedCpus - 1));
+const detectedCpus = Math.max(1, os.cpus()?.length || 4);
 const defaultFps = int("FPS", 30, 10);
 const defaultRenderFps = process.env.RENDER_FPS ? int("RENDER_FPS", defaultFps, 10) : defaultFps;
 const envWorkers = String(process.env.RENDER_WORKERS || "").trim().toLowerCase();
-const configuredWorkers = (envWorkers && envWorkers !== "auto") ? int("RENDER_WORKERS", autoWorkers, 1) : autoWorkers;
-const finalWorkers = (process.platform !== "win32" && detectedCpus <= 4 && configuredWorkers >= detectedCpus)
-  ? Math.max(1, detectedCpus - 1)
-  : configuredWorkers;
+const finalWorkers = (envWorkers && envWorkers !== "auto")
+  ? Math.max(1, int("RENDER_WORKERS", detectedCpus, 1))
+  : detectedCpus;
 export const config=Object.freeze({
   rtmpUrl:String(process.env.YOUTUBE_RTMP_URL||"rtmp://a.rtmp.youtube.com/live2").replace(/\/+$/,""),
   streamKey:String(process.env.YOUTUBE_STREAM_KEY||"").trim(),videoId:String(process.env.YOUTUBE_VIDEO_ID||"").trim(),
@@ -60,5 +58,7 @@ export const config=Object.freeze({
   ttsMinIntervalMs:Math.max(1000,Math.floor(num("TTS_MIN_INTERVAL_MS",3500))),
   ttsSpecificContestants:csv("TTS_SPECIFIC_CONTESTANTS"),
   ttsVolume:Math.max(0.1,Math.min(2.0,num("TTS_VOLUME",1.0))),
+  ttsCacheInRam:bool("TTS_CACHE_IN_RAM",true),
+  ttsCacheTtlHours:int("TTS_CACHE_TTL_HOURS",24,1),
 });
 export function validateConfig(){const errors=[],warnings=[];if(!config.streamKey||/PUT_YOUR|YOUR_|CHANGE_ME/i.test(config.streamKey))errors.push("YOUTUBE_STREAM_KEY is not configured");if(!config.videoId&&!config.youtubeApiKey)errors.push("Neither YOUTUBE_VIDEO_ID nor YOUTUBE_API_KEY is configured in .env");if(!config.adminChannelIds.length)warnings.push("ADMIN_CHANNEL_IDS is empty; owner/mod can still use theme and voting controls");return{errors,warnings};}

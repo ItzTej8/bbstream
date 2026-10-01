@@ -1,18 +1,67 @@
-import { parentPort } from "node:worker_threads";
+import { parentPort, workerData } from "node:worker_threads";
 import { Communicate } from "edge-tts-universal";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, rmSync, mkdirSync, readdirSync, statSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 const CACHE_DIR = resolve("data/audio-cache/tts");
-if (!existsSync(CACHE_DIR)) {
-  try { mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
-}
 
+// Determine storage mode from workerData or process.env (defaults to RAM = true)
+const cacheInRam = workerData?.cacheInRam !== undefined
+  ? Boolean(workerData.cacheInRam)
+  : /^(1|true|yes|on)$/i.test(String(process.env.TTS_CACHE_IN_RAM ?? "true"));
+
+const cacheTtlHours = Math.max(1, Number(workerData?.cacheTtlHours || process.env.TTS_CACHE_TTL_HOURS || 24));
+
+// In-memory bounded cache for rapid repeats (max 50 items)
 const memoryCache = new Map();
+const MAX_MEMORY_ITEMS = 50;
 
 function cleanCacheKey(str) {
   return str.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 80);
+}
+
+// Auto-delete disk cache files older than ttlHours (default 24 hours)
+function pruneExpiredDiskCache(ttlHours = 24) {
+  if (!existsSync(CACHE_DIR)) return;
+  const now = Date.now();
+  const maxAgeMs = ttlHours * 60 * 60 * 1000;
+  try {
+    const entries = readdirSync(CACHE_DIR, { withFileTypes: true });
+    let pruned = 0;
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(".pcm")) {
+        const fullPath = resolve(CACHE_DIR, entry.name);
+        try {
+          const stat = statSync(fullPath);
+          if (now - stat.mtimeMs > maxAgeMs) {
+            unlinkSync(fullPath);
+            pruned++;
+          }
+        } catch {}
+      }
+    }
+    if (pruned > 0) {
+      console.log(`[tts-cache] 🧹 Auto-pruned ${pruned} audio cache file(s) older than ${ttlHours}h`);
+    }
+  } catch (err) {
+    console.warn(`[tts-cache] Prune error: ${err.message}`);
+  }
+}
+
+if (cacheInRam) {
+  // If RAM storage is selected, clean up any legacy disk cache to save space
+  if (existsSync(CACHE_DIR)) {
+    try { rmSync(CACHE_DIR, { recursive: true, force: true }); } catch {}
+  }
+} else {
+  // If Disk storage is selected, ensure directory exists and prune expired files
+  if (!existsSync(CACHE_DIR)) {
+    try { mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
+  }
+  pruneExpiredDiskCache(cacheTtlHours);
+  // Schedule hourly auto-deletion of expired files (> 24h)
+  setInterval(() => pruneExpiredDiskCache(cacheTtlHours), 60 * 60 * 1000).unref();
 }
 
 function decodeMp3ToPcm44kStereo(mp3Buffer) {
@@ -48,7 +97,7 @@ parentPort.on("message", async (msg) => {
     const key = `${voiceName}_${cleanCacheKey(text)}`;
     const diskPath = resolve(CACHE_DIR, `${key}.pcm`);
 
-    // 1. Check memory cache
+    // 1. Check in-memory cache
     if (memoryCache.has(key)) {
       const cached = memoryCache.get(key);
       const copy = new Int16Array(cached);
@@ -56,8 +105,8 @@ parentPort.on("message", async (msg) => {
       return;
     }
 
-    // 2. Check disk cache (require at least 10,000 bytes = > 0.05s valid audio)
-    if (existsSync(diskPath)) {
+    // 2. Check disk cache if disk mode is enabled
+    if (!cacheInRam && existsSync(diskPath)) {
       try {
         const buf = readFileSync(diskPath);
         if (buf.byteLength >= 10000) {
@@ -70,7 +119,7 @@ parentPort.on("message", async (msg) => {
       } catch {}
     }
 
-    // 3. Synthesize via Edge Neural TTS in background
+    // 3. Synthesize via Edge Neural TTS
     try {
       const tts = new Communicate(text, {
         voice: voiceName
@@ -96,12 +145,21 @@ parentPort.on("message", async (msg) => {
         return;
       }
 
-      // Save to memory cache and write to disk
-      if (memoryCache.size > 200) memoryCache.clear();
+      // Save to memory cache
+      if (memoryCache.size >= MAX_MEMORY_ITEMS) {
+        const oldestKey = memoryCache.keys().next().value;
+        if (oldestKey) memoryCache.delete(oldestKey);
+      }
       memoryCache.set(key, decodedPcm);
-      try {
-        writeFileSync(diskPath, Buffer.from(decodedPcm.buffer, decodedPcm.byteOffset, decodedPcm.byteLength));
-      } catch {}
+
+      // Save to disk if disk mode is enabled
+      if (!cacheInRam) {
+        try {
+          writeFileSync(diskPath, Buffer.from(decodedPcm.buffer, decodedPcm.byteOffset, decodedPcm.byteLength));
+        } catch (err) {
+          console.warn(`[tts-cache] Failed to write disk cache: ${err.message}`);
+        }
+      }
 
       const copy = new Int16Array(decodedPcm);
       parentPort.postMessage({ type: "tts_pcm", id, pcm: copy.buffer }, [copy.buffer]);

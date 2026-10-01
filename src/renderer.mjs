@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isMainThread, Worker } from "node:worker_threads";
 import { config } from "./config.mjs";
-import { state, stats, getStateSnapshot, getCardLayoutForRank } from "./state.mjs";
+import { state, stats, getStateSnapshot, getCardLayoutForRank, activeRankTransitions } from "./state.mjs";
 import { runtime } from "./runtime.mjs";
 import { on } from "./events.mjs";
 let frameServerModule = null;
@@ -55,7 +55,8 @@ import {
   getActiveConfession,
   getContestantBuff,
   getActiveQuiz,
-  getInteractiveSnapshot
+  getInteractiveSnapshot,
+  isScreenAuto
 } from "./interactive.mjs";
 import { LIKE_MAGIC_THEMES } from "./likes-monitor.mjs";
 
@@ -204,7 +205,7 @@ export function registerAllFonts() {
       if (existsSync(f.path)) {
         GlobalFonts.registerFromPath(f.path, f.family);
       }
-    } catch {}
+    } catch { }
   }
 
   // Set universal aliases so ANY font reference (sans-serif, Arial, Segoe UI) resolves to bundled Roboto on Linux VPS
@@ -212,14 +213,14 @@ export function registerAllFonts() {
     GlobalFonts.setAlias("Roboto", "sans-serif");
     GlobalFonts.setAlias("Roboto", "Segoe UI");
     GlobalFonts.setAlias("Roboto", "Arial");
-  } catch {}
+  } catch { }
 
   for (const f of SYSTEM_LATIN_FONTS) {
     try {
       if (existsSync(f.path)) {
         GlobalFonts.registerFromPath(f.path, f.family);
       }
-    } catch {}
+    } catch { }
   }
 
   for (const p of EMOJI_FONT_PATHS) {
@@ -228,7 +229,7 @@ export function registerAllFonts() {
         GlobalFonts.registerFromPath(p, "Segoe UI Emoji");
         break;
       }
-    } catch {}
+    } catch { }
   }
 }
 
@@ -405,7 +406,7 @@ async function loadBackground() {
     try {
       bgImage = await loadImage(await readFile(path));
       break;
-    } catch {}
+    } catch { }
   }
   bgDarkCanvas = buildPreRenderedBackdrop("dark");
   bgLightCanvas = buildPreRenderedBackdrop("light");
@@ -544,8 +545,8 @@ function drawTopBar(c, p, now) {
   const countStr = viewersCount >= 1000000
     ? `${(viewersCount / 1000000).toFixed(1)}M`
     : viewersCount >= 1000
-    ? `${(viewersCount / 1000).toFixed(1)}K`
-    : String(viewersCount);
+      ? `${(viewersCount / 1000).toFixed(1)}K`
+      : String(viewersCount);
 
   const rawViews = (runtime.chat.viewCount !== undefined && runtime.chat.viewCount !== null && runtime.chat.viewCount >= 0)
     ? runtime.chat.viewCount
@@ -554,18 +555,18 @@ function drawTopBar(c, p, now) {
   const viewsStr = viewsCount >= 1000000
     ? `${(viewsCount / 1000000).toFixed(1)}M`
     : viewsCount >= 1000
-    ? `${(viewsCount / 1000).toFixed(1)}K`
-    : Number(viewsCount).toLocaleString();
+      ? `${(viewsCount / 1000).toFixed(1)}K`
+      : Number(viewsCount).toLocaleString();
 
   const rawSubs = runtime.chat?.subscriberCount || state?.subscriberCount || (process.env.SUBSCRIBER_COUNT ? Number(process.env.SUBSCRIBER_COUNT) : 54925);
   const subsCount = (typeof rawSubs === "number" && rawSubs > 0) ? rawSubs : 54925;
   const subsFormatted = subsCount >= 1000000
     ? `${(subsCount / 1000000).toFixed(2)}M`
     : subsCount >= 10000
-    ? `${(subsCount / 1000).toFixed(1)}K`
-    : subsCount >= 1000
-    ? `${(subsCount / 1000).toFixed(2)}K`
-    : Number(subsCount).toLocaleString();
+      ? `${(subsCount / 1000).toFixed(1)}K`
+      : subsCount >= 1000
+        ? `${(subsCount / 1000).toFixed(2)}K`
+        : Number(subsCount).toLocaleString();
 
   const pillX = 44, pillW = 188, pillH = 34, pillR = pillH / 2;
   const pill1Y = 82;
@@ -641,8 +642,8 @@ function drawTopBar(c, p, now) {
   const likesFormatted = rawLikes >= 1000000
     ? `${(rawLikes / 1000000).toFixed(1)}M`
     : rawLikes >= 1000
-    ? `${(rawLikes / 1000).toFixed(1)}K`
-    : Number(rawLikes).toLocaleString();
+      ? `${(rawLikes / 1000).toFixed(1)}K`
+      : Number(rawLikes).toLocaleString();
 
   c.strokeStyle = p.theme === "light" ? "#ec4899" : "rgba(236, 72, 153, 0.65)";
   c.lineWidth = ps(1.5);
@@ -658,85 +659,92 @@ function drawTopBar(c, p, now) {
   c.restore();
   textC(c, `${likesFormatted} Likes`, pillX + 34, pill4Y + 23, 15.5, "#ec4899", 800);
 
-  // --- 1. ANIMATED SUBSCRIBE BUTTON ARROW CARD (Points directly to YouTube's native Subscribe button) ---
-  const subCardX = 720, subCardY = 142, subCardW = 320, subCardH = 64, subCardR = 14;
+  // --- 1. ANIMATED SUBSCRIBE BUTTON ARROW CARD ---
+  // Arrow is UPWARD-pointing (↑) — tip at top, stem bottom anchored just above subscribe card.
+  // Sonar rings radiate upward from tip, pointing toward YouTube's native subscribe button.
+  const subCardX = 720, subCardY = 182, subCardW = 320, subCardH = 64, subCardR = 14;
   const subBounce = Math.sin(now * 0.008) * 4;
-  const arrowX = 785; // Aligns directly with center of YouTube's native Subscribe button
-  const arrowTipY = 82 + subBounce;
+  const arrowX = subCardX + 100; // slightly left of center (was 880, now 840)
+  const arrowW = 16, arrowHeadH = 16, stemW = 8, stemH = 12;
+  // Arrow moved slightly up: stem bottom 15px above card top (was 5px)
+  const arrowBottomY = subCardY - 15 + subBounce;   // stem bottom
+  const arrowTipY = arrowBottomY - arrowHeadH - stemH; // tip at the very top (pointing ↑)
 
   c.save();
-  // Upward radiating sonar wave beams targeting YouTube's Subscribe button
+
+  // Upward sonar arcs from arrow tip — indicating "YouTube subscribe button is up there"
+  const arrowPulse = 0.5 + 0.5 * Math.sin(now * 0.01);
   for (let w = 0; w < 3; w++) {
     const wavePhase = ((now * 0.0024 + w * 0.33) % 1);
-    const waveY = arrowTipY - 4 - wavePhase * 18;
-    const waveAlpha = (1 - wavePhase) * 0.9;
-    const waveW = 16 + wavePhase * 24;
+    const waveY = arrowTipY - 4 - wavePhase * 16;
+    const waveAlpha = (1 - wavePhase) * 0.85;
+    const waveR = 8 + wavePhase * 16;
     c.strokeStyle = `rgba(239, 68, 68, ${waveAlpha})`;
-    c.lineWidth = ps(2.2);
+    c.lineWidth = ps(2.0);
     c.beginPath();
-    c.arc(px(arrowX), py(waveY), ps(waveW / 2), Math.PI * 1.15, Math.PI * 1.85);
+    c.arc(px(arrowX), py(waveY), ps(waveR), Math.PI * 1.1, Math.PI * 1.9);
     c.stroke();
   }
 
-  // Dark shield backdrop behind arrow for extreme contrast
-  c.fillStyle = "rgba(10, 16, 32, 0.92)";
+  // Dark halo behind arrow for contrast
+  c.fillStyle = `rgba(10, 16, 32, ${0.85 + 0.1 * arrowPulse})`;
   c.beginPath();
-  c.arc(px(arrowX), py(arrowTipY + 13), ps(18), 0, Math.PI * 2);
+  c.ellipse(px(arrowX), py(arrowTipY + (arrowHeadH + stemH) / 2), ps(20), ps((arrowHeadH + stemH) / 2 + 6), 0, 0, Math.PI * 2);
   c.fill();
-  c.strokeStyle = "rgba(251, 191, 36, 0.6)";
+  c.strokeStyle = `rgba(251, 191, 36, ${0.45 + 0.35 * arrowPulse})`;
   c.lineWidth = ps(1.5);
   c.stroke();
 
-  // Upward Pointing 3D Neon Arrow Head + Stem (crisp, elegant proportions)
-  const arrowW = 16, arrowHeadH = 16, stemW = 8, stemH = 10;
+  // UPWARD-Pointing Neon Arrow: tip at TOP (arrowTipY), stem base at bottom (arrowBottomY)
   c.beginPath();
-  c.moveTo(px(arrowX), py(arrowTipY)); // Top point
-  c.lineTo(px(arrowX - arrowW), py(arrowTipY + arrowHeadH)); // Left wing
-  c.lineTo(px(arrowX - stemW / 2), py(arrowTipY + arrowHeadH - 2)); // Left inner notch
-  c.lineTo(px(arrowX - stemW / 2), py(arrowTipY + arrowHeadH + stemH)); // Left stem base
-  c.lineTo(px(arrowX + stemW / 2), py(arrowTipY + arrowHeadH + stemH)); // Right stem base
-  c.lineTo(px(arrowX + stemW / 2), py(arrowTipY + arrowHeadH - 2)); // Right inner notch
-  c.lineTo(px(arrowX + arrowW), py(arrowTipY + arrowHeadH)); // Right wing
+  c.moveTo(px(arrowX), py(arrowTipY));                              // ↑ tip (TOP point)
+  c.lineTo(px(arrowX - arrowW), py(arrowTipY + arrowHeadH));       // left wing
+  c.lineTo(px(arrowX - stemW / 2), py(arrowTipY + arrowHeadH - 2));// left inner notch
+  c.lineTo(px(arrowX - stemW / 2), py(arrowBottomY));              // left stem base
+  c.lineTo(px(arrowX + stemW / 2), py(arrowBottomY));              // right stem base
+  c.lineTo(px(arrowX + stemW / 2), py(arrowTipY + arrowHeadH - 2));// right inner notch
+  c.lineTo(px(arrowX + arrowW), py(arrowTipY + arrowHeadH));       // right wing
   c.closePath();
 
-  // Outer radiant red/gold aura
-  const arrowPulse = 0.5 + 0.5 * Math.sin(now * 0.01);
+  // Outer red glow aura
   c.strokeStyle = `rgba(255, 0, 0, ${0.5 + 0.45 * arrowPulse})`;
   c.lineWidth = ps(5 + arrowPulse * 2.5);
   c.stroke();
 
-  // Arrow gradient fill (White tip to YouTube Red to Gold Glow)
-  const arrowGrad = c.createLinearGradient(px(arrowX), py(arrowTipY), px(arrowX), py(arrowTipY + arrowHeadH + stemH));
-  arrowGrad.addColorStop(0, "#ffffff");
-  arrowGrad.addColorStop(0.25, "#ff0000");
-  arrowGrad.addColorStop(0.75, "#f59e0b");
-  arrowGrad.addColorStop(1, "#fbbf24");
+  // Gradient: gold at stem base → YouTube Red → WHITE at tip (top)
+  const arrowGrad = c.createLinearGradient(px(arrowX), py(arrowBottomY), px(arrowX), py(arrowTipY));
+  arrowGrad.addColorStop(0, "#fbbf24");
+  arrowGrad.addColorStop(0.35, "#f59e0b");
+  arrowGrad.addColorStop(0.72, "#ff0000");
+  arrowGrad.addColorStop(1, "#ffffff");
   c.fillStyle = arrowGrad;
   c.fill();
 
   c.strokeStyle = "#ffffff";
   c.lineWidth = ps(1.8);
   c.stroke();
-  drawMagicSparkle(c, arrowX, arrowTipY - 2, 6.5, now, "#ffffff");
+  drawMagicSparkle(c, arrowX, arrowTipY - 3, 6.5, now, "#ffffff");
 
-  // Premium Dark Glass Card Base (positioned with generous breathing distance below the arrow)
+  // Premium Dark Glass Card Base
   c.fillStyle = "rgba(10, 16, 32, 0.96)";
   rr(c, subCardX, subCardY, subCardW, subCardH, subCardR);
   c.fill();
 
-  const subCardBg = c.createLinearGradient(px(subCardX), 0, px(subCardX + subCardW), 0);
-  subCardBg.addColorStop(0, "rgba(239, 68, 68, 0.32)");
-  subCardBg.addColorStop(0.5, "rgba(245, 158, 11, 0.25)");
-  subCardBg.addColorStop(1, "rgba(239, 68, 68, 0.28)");
+  const subCardBg = getCachedLinearGrad(c, px(subCardX), 0, px(subCardX + subCardW), 0, [
+    0, "rgba(239, 68, 68, 0.32)",
+    0.5, "rgba(245, 158, 11, 0.25)",
+    1, "rgba(239, 68, 68, 0.28)"
+  ]);
   c.fillStyle = subCardBg;
   rr(c, subCardX, subCardY, subCardW, subCardH, subCardR);
   c.fill();
 
   // Animated gradient border
-  const subBorder = c.createLinearGradient(px(subCardX), 0, px(subCardX + subCardW), 0);
-  subBorder.addColorStop(0, "#ff0000");
-  subBorder.addColorStop(0.5, "#fbbf24");
-  subBorder.addColorStop(1, "#ff0000");
+  const subBorder = getCachedLinearGrad(c, px(subCardX), 0, px(subCardX + subCardW), 0, [
+    0, "#ff0000",
+    0.5, "#fbbf24",
+    1, "#ff0000"
+  ]);
   c.strokeStyle = subBorder;
   c.lineWidth = ps(1.8);
   rr(c, subCardX, subCardY, subCardW, subCardH, subCardR);
@@ -752,14 +760,14 @@ function drawTopBar(c, p, now) {
 
   textC(c, "TAP TO SUBSCRIBE", subCardX + 44, subCardY + 27, 14.5, "#ffffff", 950);
   drawEmoji(c, "👆", px(subCardX + subCardW - 22), py(subCardY + 24), ps(16));
-  textC(c, "Support your favorite contestant!", subCardX + 44, subCardY + 49, 11.5, "#fbbf24", 800);
+  textC(c, "Turn on bell notifications!", subCardX + 44, subCardY + 49, 11.5, "#fbbf24", 800);
   drawMagicSparkle(c, subCardX + subCardW - 14, subCardY + 49, 6, now, "#fbbf24");
   c.restore();
 
-  // --- 2. UPGRADED HIGH-IMPACT "DOUBLE TAP FOR MAGIC ✨" BUTTON (Top Right Y = 218) ---
+  // --- 2. UPGRADED HIGH-IMPACT "DOUBLE TAP FOR MAGIC ✨" BUTTON (Top Right Y = 256) ---
   const isDtHighlighted = Boolean(state.highlightDoubleTapUntil && now < state.highlightDoubleTapUntil);
   const dtW = 320, dtH = 38, dtR = dtH / 2;
-  const dtX = 720, dtY = 218;
+  const dtX = 720, dtY = 256;
   const dtPulse = 0.5 + 0.5 * Math.sin(now * (isDtHighlighted ? 0.024 : 0.009));
 
   c.save();
@@ -1073,6 +1081,20 @@ function drawEye(c, p, cx, cy, scale = 1, now = Date.now()) {
   c.fill();
 
   c.restore();
+}
+
+const linearGradCache = new Map();
+function getCachedLinearGrad(c, x0, y0, x1, y1, stops) {
+  const key = `${x0}|${y0}|${x1}|${y1}|${stops.join(",")}`;
+  let g = linearGradCache.get(key);
+  if (!g) {
+    g = c.createLinearGradient(x0, y0, x1, y1);
+    for (let i = 0; i < stops.length; i += 2) {
+      g.addColorStop(stops[i], stops[i + 1]);
+    }
+    linearGradCache.set(key, g);
+  }
+  return g;
 }
 
 const sparkleSprites = new Map();
@@ -1997,51 +2019,51 @@ function drawFooter(c, p, now = Date.now(), customY = null) {
   const trkInfo = (typeof getMusicTrackInfo === "function") ? getMusicTrackInfo() : null;
   const isMusicPhase = Math.floor(now / 5000) % 2 === 1 && trkInfo;
 
-    if (isMusicPhase) {
-      const mGrad = c.createLinearGradient(px(ribX), 0, px(ribX + ribW), 0);
-      mGrad.addColorStop(0, "#1e1b4b");
-      mGrad.addColorStop(0.5, "#3b0764");
-      mGrad.addColorStop(1, "#082f49");
-      c.fillStyle = mGrad;
-      rr(c, ribX, tipY, ribW, ribH, 12);
-      c.fill();
+  if (isMusicPhase) {
+    const mGrad = c.createLinearGradient(px(ribX), 0, px(ribX + ribW), 0);
+    mGrad.addColorStop(0, "#1e1b4b");
+    mGrad.addColorStop(0.5, "#3b0764");
+    mGrad.addColorStop(1, "#082f49");
+    c.fillStyle = mGrad;
+    rr(c, ribX, tipY, ribW, ribH, 12);
+    c.fill();
 
-      const mbGrad = c.createLinearGradient(px(ribX), 0, px(ribX + ribW), 0);
-      mbGrad.addColorStop(0, "#8b5cf6");
-      mbGrad.addColorStop(0.5, "#ec4899");
-      mbGrad.addColorStop(1, "#00f0ff");
-      c.strokeStyle = mbGrad;
-      c.lineWidth = ps(1.8);
-      rr(c, ribX, tipY, ribW, ribH, 12);
-      c.stroke();
+    const mbGrad = c.createLinearGradient(px(ribX), 0, px(ribX + ribW), 0);
+    mbGrad.addColorStop(0, "#8b5cf6");
+    mbGrad.addColorStop(0.5, "#ec4899");
+    mbGrad.addColorStop(1, "#00f0ff");
+    c.strokeStyle = mbGrad;
+    c.lineWidth = ps(1.8);
+    rr(c, ribX, tipY, ribW, ribH, 12);
+    c.stroke();
 
-      // Equalizer mini-bars on left
-      const eqColors = ["#8b5cf6", "#ec4899", "#f59e0b", "#00f0ff"];
-      for (let mi = 0; mi < 4; mi++) {
-        const mh = 6 + Math.abs(Math.sin(now * 0.008 + mi * 1.2)) * 14;
-        c.fillStyle = eqColors[mi];
-        c.fillRect(px(ribX + 18 + mi * 7), py(tipY + 28 - mh), ps(4), ps(mh));
-      }
-
-      const modeIcon = trkInfo.loopMode === "loop" ? "AUTO-LOOP" : "REPEAT";
-      textC(c, `NOW PLAYING: #${trkInfo.id} "${trkInfo.name}" (${trkInfo.genre})`, ribX + 56, tipY + 28, 15, "#f472b6", 800);
-      textC(c, `${modeIcon} • Chat: !track <1-40>`, ribX + ribW - 18, tipY + 28, 14, "#38bdf8", 800, "right");
-    } else {
-      c.fillStyle = p.theme === "light" ? "rgba(241, 245, 249, 0.94)" : "rgba(15, 23, 42, 0.90)";
-      rr(c, ribX, tipY, ribW, ribH, 12);
-      c.fill();
-
-      const cbGrad = c.createLinearGradient(px(ribX), 0, px(ribX + ribW), 0);
-      cbGrad.addColorStop(0, "rgba(56, 189, 248, 0.5)");
-      cbGrad.addColorStop(0.5, "rgba(251, 191, 36, 0.5)");
-      cbGrad.addColorStop(1, "rgba(244, 114, 182, 0.5)");
-      c.strokeStyle = cbGrad;
-      c.lineWidth = ps(1.4);
-      rr(c, ribX, tipY, ribW, ribH, 12);
-      c.stroke();
-
-      textC(c, "🎮 CHAT COMMANDS: !vote <1-17> • !track <1-40> • !buzzer • !clash • !fortune • !spotlight • !magic • !shield", 540, tipY + 28, 14.5, p.text, 800, "center");
+    // Equalizer mini-bars on left
+    const eqColors = ["#8b5cf6", "#ec4899", "#f59e0b", "#00f0ff"];
+    for (let mi = 0; mi < 4; mi++) {
+      const mh = 6 + Math.abs(Math.sin(now * 0.008 + mi * 1.2)) * 14;
+      c.fillStyle = eqColors[mi];
+      c.fillRect(px(ribX + 18 + mi * 7), py(tipY + 28 - mh), ps(4), ps(mh));
     }
+
+    const modeIcon = trkInfo.loopMode === "loop" ? "AUTO-LOOP" : "REPEAT";
+    textC(c, `NOW PLAYING: #${trkInfo.id} "${trkInfo.name}" (${trkInfo.genre})`, ribX + 56, tipY + 28, 15, "#f472b6", 800);
+    textC(c, `${modeIcon} • Chat: !track <1-${trkInfo.total || 30}>`, ribX + ribW - 18, tipY + 28, 14, "#38bdf8", 800, "right");
+  } else {
+    c.fillStyle = p.theme === "light" ? "rgba(241, 245, 249, 0.94)" : "rgba(15, 23, 42, 0.90)";
+    rr(c, ribX, tipY, ribW, ribH, 12);
+    c.fill();
+
+    const cbGrad = c.createLinearGradient(px(ribX), 0, px(ribX + ribW), 0);
+    cbGrad.addColorStop(0, "rgba(56, 189, 248, 0.5)");
+    cbGrad.addColorStop(0.5, "rgba(251, 191, 36, 0.5)");
+    cbGrad.addColorStop(1, "rgba(244, 114, 182, 0.5)");
+    c.strokeStyle = cbGrad;
+    c.lineWidth = ps(1.4);
+    rr(c, ribX, tipY, ribW, ribH, 12);
+    c.stroke();
+
+    textC(c, "🎮 CHAT COMMANDS: !vote <1-17> • !track <1-30> • !buzzer • !clash • !fortune • !spotlight • !magic • !shield", 540, tipY + 28, 14.5, p.text, 800, "center");
+  }
 
   const noteY = tipY + 46 + 26;
   textC(c, "HOW TO VOTE: Type !vote followed by contestant name or number in live chat (e.g. !vote Mary)", 540, noteY, 14, p.theme === "light" ? "#475569" : p.muted, 750, "center");
@@ -2313,10 +2335,10 @@ function getCompactCardStatic(item, p) {
 function drawCompactContestantCard(c, p, item, rank, totalVotes, leaderVotes, now, x, y, w, h, anim = null) {
   // Rank-based color tier
   const colors = (rank === 1) ? ["#38bdf8", "#0284c7"] :
-                 (rank === 2) ? ["#f472b6", "#db2777"] :
-                 (rank <= 5)  ? ["#4ade80", "#16a34a"] :
-                 (rank >= 13) ? ["#f87171", "#dc2626"] :
-                 ["#94a3b8", "#64748b"];
+    (rank === 2) ? ["#f472b6", "#db2777"] :
+      (rank <= 5) ? ["#4ade80", "#16a34a"] :
+        (rank >= 13) ? ["#f87171", "#dc2626"] :
+          ["#94a3b8", "#64748b"];
   const rankColor = colors[0];
   const isVotedCard = (state.chatVoteFlashContestant === item.no && (now - state.chatVoteFlashAt < 6000));
   const isElevated = (anim?.elevation > 0 || anim?.overtaking);
@@ -2383,10 +2405,11 @@ function drawCompactContestantCard(c, p, item, rank, totalVotes, leaderVotes, no
   // 4. Rank Badge on avatar shoulder — Enlarged & bold with Top 3 metallic finishes
   const rankX = x + 18, rankY = y + 18, rankR = 14;
   if (rank === 1) { // #2 Silver/Platinum Medal
-    const silverGrad = c.createLinearGradient(px(rankX - rankR), py(rankY - rankR), px(rankX + rankR), py(rankY + rankR));
-    silverGrad.addColorStop(0, "#ffffff");
-    silverGrad.addColorStop(0.5, "#cbd5e1");
-    silverGrad.addColorStop(1, "#94a3b8");
+    const silverGrad = getCachedLinearGrad(c, px(rankX - rankR), py(rankY - rankR), px(rankX + rankR), py(rankY + rankR), [
+      0, "#ffffff",
+      0.5, "#cbd5e1",
+      1, "#94a3b8"
+    ]);
     c.fillStyle = silverGrad;
     c.beginPath();
     c.arc(px(rankX), py(rankY), ps(rankR), 0, Math.PI * 2);
@@ -2397,10 +2420,11 @@ function drawCompactContestantCard(c, p, item, rank, totalVotes, leaderVotes, no
     textC(c, "2", rankX, rankY + 5, 14, "#0f172a", 900, "center");
     drawMagicSparkle(c, rankX + 7, rankY - 7, 4, now * 2, "#ffffff");
   } else if (rank === 2) { // #3 Bronze/Copper Medal
-    const bronzeGrad = c.createLinearGradient(px(rankX - rankR), py(rankY - rankR), px(rankX + rankR), py(rankY + rankR));
-    bronzeGrad.addColorStop(0, "#fde68a");
-    bronzeGrad.addColorStop(0.5, "#d97706");
-    bronzeGrad.addColorStop(1, "#92400e");
+    const bronzeGrad = getCachedLinearGrad(c, px(rankX - rankR), py(rankY - rankR), px(rankX + rankR), py(rankY + rankR), [
+      0, "#fde68a",
+      0.5, "#d97706",
+      1, "#92400e"
+    ]);
     c.fillStyle = bronzeGrad;
     c.beginPath();
     c.arc(px(rankX), py(rankY), ps(rankR), 0, Math.PI * 2);
@@ -2594,7 +2618,7 @@ function drawLiveVoteFeed(c, p, now, y = 1445, h = 270) {
     lastV ? `⚡ LATEST VOTE: @${lastV.name || "Viewer"} voted for ${lastCandidate}!` : `⚡ VOTING ACTIVE: Type !vote <1-17> in live chat to support!`,
     `👑 LEADER STANDINGS: ${leaderItem.displayName || leaderItem.name} leads with ${Number(leaderItem.votes || 0).toLocaleString()} votes!`,
     `⚠️ EVICTION WARNING: Bottom 3 contestants are currently in the Danger Zone!`,
-    `🎮 CHAT COMMANDS: !vote <1-17> • !track <1-40> • !magic • !drop • !bomb`,
+    `🎮 CHAT COMMANDS: !vote <1-17> • !track <1-30> • !magic • !drop • !bomb`,
     `💎 PRO-TIP: Double-tap the video on YouTube for special celebration magic!`
   ];
   const tickerCycle = 4000;
@@ -2670,7 +2694,7 @@ function drawLiveVoteFeed(c, p, now, y = 1445, h = 270) {
     const defaults = [
       { user: "Live_Streamer", text: "Voting is OPEN! Vote via chat (e.g. !vote Mary)", tag: "LIVE", col: p.goldBright, time: "Active" },
       { user: "BB20_Viewer", text: "Track rank overtakes live with smooth animations", tag: "INFO", col: p.cyan, time: "Active" },
-      { user: "Chat_Bot", text: "Use !track <1-40> or !track loop to change music", tag: "MUSIC", col: "#ec4899", time: "Active" },
+      { user: "Chat_Bot", text: "Use !track <1-30> or !track loop to change music", tag: "MUSIC", col: "#ec4899", time: "Active" },
       { user: "Vote_Counter", text: "Every accepted vote updates scores in real-time", tag: "VERIFIED", col: "#22c55e", time: "Active" }
     ];
     rows.push(defaults[defaultIdx]);
@@ -3378,7 +3402,7 @@ function drawCommandsScreenContent(c, p, now) {
         { cmd: "!announce on / off", desc: "Turn the natural AI speaker announcer ON or OFF in real time" },
         { cmd: "!announce lang en/hi", desc: "Switch voice language: English (PrabhatNeural) or Hindi (SwaraNeural)" },
         { cmd: "!announce mode 1 / 2", desc: "Mode 1: Announce vote only • Mode 2: Announce vote + candidate total votes" },
-        { cmd: "!track 1-40 • !vol", desc: "Change lofi background tracks (!track 1-40), set volume (!vol 1-100), or !track loop" }
+        { cmd: "!track 1-30 • !vol", desc: "Change lofi background tracks (!track 1-30), set volume (!vol 1-100), or !track loop" }
       ]
     },
     {
@@ -3491,47 +3515,47 @@ function seedParticles(e, now) {
 
   // Type-specific spawn configs
   const cfg = {
-    drop:        { count: 40, colors: ["#fbbf24", "#f59e0b", "#38bdf8", "#f472b6", "#ffffff"], cx: 540, cy: 1340, spread: 400, speedMin: 90, speedMax: 300, maxLife: 2400, gravity: 85, sizeMin: 6, sizeMax: 16, shape: "star" },
-    rain:        { count: 55, colors: ["#38bdf8", "#a5f3fc", "#7dd3fc", "#e0f2fe", "#f472b6"], cx: 540, cy: 100,  spread: 500, speedMin: 60,  speedMax: 220, maxLife: 2800, gravity: 90,  sizeMin: 6,  sizeMax: 14, shape: "drop"   },
-    boom:        { count: 65, colors: ["#ef4444", "#f97316", "#fbbf24", "#ffffff", "#fb923c"], cx: 540, cy: 900,  spread: 60,  speedMin: 180, speedMax: 500, maxLife: 1600, gravity: 120, sizeMin: 5,  sizeMax: 16, shape: "spark"  },
-    heart:       { count: 36, colors: ["#f472b6", "#fb7185", "#fda4af", "#ff4d6d", "#fbbf24"], cx: 540, cy: 960,  spread: 340, speedMin: 30,  speedMax: 150, maxLife: 2400, gravity: -40, sizeMin: 10, sizeMax: 20, shape: "heart"  },
-    like_magic:  { count: 80, colors: ["#ff007f", "#ec4899", "#fbbf24", "#f43f5e", "#ffffff", "#a855f7"], cx: 540, cy: 960, spread: 450, speedMin: 120, speedMax: 420, maxLife: 3200, gravity: -40, sizeMin: 8, sizeMax: 22, shape: "heart" },
-    milestone:   { count: 80, colors: ["#fbbf24", "#f472b6", "#38bdf8", "#4ade80", "#c084fc", "#ffffff"], cx: 540, cy: 750, spread: 400, speedMin: 100, speedMax: 400, maxLife: 3000, gravity: 95,  sizeMin: 6,  sizeMax: 18, shape: "star"   },
-    vote:        { count: 45, colors: ["#fbbf24", "#ffffff", "#38bdf8", "#f59e0b", "#fde68a", "#f472b6"], cx: 540, cy: 860,  spread: 360, speedMin: 90,  speedMax: 320, maxLife: 2200, gravity: 75,  sizeMin: 6,  sizeMax: 14, shape: "star"   },
-    wheel:       { count: 40, colors: ["#fbbf24", "#c084fc", "#38bdf8", "#4ade80", "#f472b6"], cx: 540, cy: 860,  spread: 300, speedMin: 100, speedMax: 360, maxLife: 2400, gravity: 85,  sizeMin: 6,  sizeMax: 16, shape: "star"   },
-    bomb:        { count: 70, colors: ["#ef4444", "#fbbf24", "#fb923c", "#1e293b", "#ffffff"], cx: 540, cy: 900,  spread: 40,  speedMin: 250, speedMax: 620, maxLife: 1800, gravity: 150, sizeMin: 4,  sizeMax: 14, shape: "spark"  },
-    hype:        { count: 45, colors: ["#ef4444", "#f97316", "#fbbf24", "#ec4899", "#ffffff"], cx: 540, cy: 820,  spread: 380, speedMin: 80,  speedMax: 300, maxLife: 2200, gravity: 60,  sizeMin: 7,  sizeMax: 18, shape: "star"   },
-    confetti:    { count: 90, colors: ["#fbbf24", "#38bdf8", "#f472b6", "#4ade80", "#c084fc", "#ef4444", "#fb923c"], cx: 540, cy: 0, spread: 680, speedMin: 60, speedMax: 280, maxLife: 3400, gravity: 120, sizeMin: 5, sizeMax: 15, shape: "rect"  },
-    fireworks:   { count: 60, colors: ["#fbbf24", "#38bdf8", "#f472b6", "#4ade80", "#ffffff"], cx: 540, cy: 500, spread: 500, speedMin: 120, speedMax: 420, maxLife: 2400, gravity: 70,  sizeMin: 4,  sizeMax: 12, shape: "spark"  },
-    lightning:   { count: 30, colors: ["#38bdf8", "#7dd3fc", "#bfdbfe", "#ffffff", "#fbbf24"], cx: 540, cy: 960,  spread: 120, speedMin: 60,  speedMax: 280, maxLife: 1200, gravity: 20,  sizeMin: 4,  sizeMax: 10, shape: "spark"  },
-    laser:       { count: 45, colors: ["#00f0ff", "#ff007f", "#39ff14", "#ffe600", "#ffffff"], cx: 540, cy: 960,  spread: 400, speedMin: 120, speedMax: 350, maxLife: 2000, gravity: 30,  sizeMin: 4,  sizeMax: 10, shape: "spark"  },
-    magic:       { count: 65, colors: ["#fbbf24", "#fef08a", "#c084fc", "#e879f9", "#38bdf8", "#ffffff"], cx: 540, cy: 960, spread: 400, speedMin: 80, speedMax: 320, maxLife: 2600, gravity: -30, sizeMin: 5, sizeMax: 14, shape: "star" },
-    shield:      { count: 40, colors: ["#00f0ff", "#38bdf8", "#a5f3fc", "#ffffff", "#0284c7"], cx: 540, cy: 960, spread: 450, speedMin: 50, speedMax: 200, maxLife: 2200, gravity: 20, sizeMin: 4, sizeMax: 10, shape: "spark" },
-    meteor:      { count: 75, colors: ["#ff4500", "#ff8c00", "#ffd700", "#ffffff", "#dc2626"], cx: 540, cy: 960, spread: 250, speedMin: 180, speedMax: 550, maxLife: 2000, gravity: 120, sizeMin: 5, sizeMax: 16, shape: "spark" },
-    boost:       { count: 50, colors: ["#38bdf8", "#00f0ff", "#fbbf24", "#f97316", "#ffffff"], cx: 540, cy: 960, spread: 300, speedMin: 150, speedMax: 420, maxLife: 1800, gravity: 40, sizeMin: 4, sizeMax: 12, shape: "spark" },
-    vortex:      { count: 70, colors: ["#38bdf8", "#818cf8", "#c084fc", "#f472b6", "#ffffff"], cx: 540, cy: 960, spread: 320, speedMin: 120, speedMax: 380, maxLife: 2800, gravity: 0, sizeMin: 4, sizeMax: 12, shape: "star" },
-    dragon:      { count: 80, colors: ["#ef4444", "#f97316", "#fbbf24", "#ffd700", "#7f1d1d"], cx: 540, cy: 1100, spread: 220, speedMin: 140, speedMax: 480, maxLife: 2600, gravity: -120, sizeMin: 6, sizeMax: 18, shape: "spark" },
-    matrix:      { count: 60, colors: ["#22c55e", "#4ade80", "#86efac", "#00ffcc", "#ffffff"], cx: 540, cy: 80, spread: 800, speedMin: 150, speedMax: 400, maxLife: 3200, gravity: 140, sizeMin: 8, sizeMax: 16, shape: "rect" },
-    supernova:   { count: 90, colors: ["#ffffff", "#fef08a", "#fbbf24", "#f472b6", "#38bdf8"], cx: 540, cy: 900, spread: 120, speedMin: 220, speedMax: 650, maxLife: 3000, gravity: 40, sizeMin: 5, sizeMax: 16, shape: "star" },
-    champion:    { count: 70, colors: ["#fbbf24", "#f59e0b", "#fef08a", "#ffffff", "#ffd700"], cx: 540, cy: 850, spread: 380, speedMin: 80, speedMax: 320, maxLife: 3000, gravity: -35, sizeMin: 6, sizeMax: 16, shape: "star" },
-    aurora:      { count: 65, colors: ["#10b981", "#06b6d4", "#8b5cf6", "#d946ef", "#ffffff"], cx: 540, cy: 480, spread: 500, speedMin: 40, speedMax: 160, maxLife: 3200, gravity: -15, sizeMin: 5, sizeMax: 14, shape: "star" },
-    phoenix:     { count: 80, colors: ["#fbbf24", "#f97316", "#ef4444", "#ffd700", "#ffffff"], cx: 540, cy: 1100, spread: 260, speedMin: 120, speedMax: 450, maxLife: 2800, gravity: -90, sizeMin: 6, sizeMax: 18, shape: "spark" },
-    disco:       { count: 70, colors: ["#00f0ff", "#ff007f", "#ffe600", "#39ff14", "#ffffff"], cx: 540, cy: 500, spread: 600, speedMin: 80, speedMax: 320, maxLife: 2600, gravity: 40, sizeMin: 4, sizeMax: 12, shape: "star" },
-    tornado:     { count: 75, colors: ["#38bdf8", "#0284c7", "#fbbf24", "#ffffff"], cx: 540, cy: 800, spread: 240, speedMin: 150, speedMax: 480, maxLife: 2600, gravity: 0, sizeMin: 4, sizeMax: 12, shape: "spark" },
-    clap:        { count: 40, colors: ["#fbbf24", "#ffd700", "#ffffff", "#f59e0b"], cx: 540, cy: 880, spread: 320, speedMin: 90, speedMax: 280, maxLife: 2000, gravity: 60, sizeMin: 6, sizeMax: 14, shape: "star" },
-    confess:     { count: 40, colors: ["#fef08a", "#fbbf24", "#f472b6", "#c084fc", "#ffffff"], cx: 540, cy: 800, spread: 360, speedMin: 50, speedMax: 200, maxLife: 2400, gravity: -20, sizeMin: 4, sizeMax: 12, shape: "star" },
-    quiz:        { count: 45, colors: ["#fbbf24", "#38bdf8", "#4ade80", "#ffffff"], cx: 540, cy: 750, spread: 350, speedMin: 70, speedMax: 260, maxLife: 2400, gravity: 50, sizeMin: 5, sizeMax: 14, shape: "star" },
-    combo:       { count: 30, colors: ["#fbbf24", "#f472b6", "#38bdf8", "#ffffff"], cx: 540, cy: 900, spread: 180, speedMin: 60, speedMax: 240, maxLife: 1600, gravity: 75, sizeMin: 5, sizeMax: 12, shape: "star" },
-    gift:        { count: 28, colors: ["#fbbf24", "#f472b6", "#4ade80", "#38bdf8", "#ffffff"], cx: 540, cy: 700, spread: 200, speedMin: 50, speedMax: 200, maxLife: 2000, gravity: 70, sizeMin: 6, sizeMax: 14, shape: "star" },
-    buzzer:      { count: 60, colors: ["#fbbf24", "#ef4444", "#ffd700", "#f59e0b", "#ffffff"], cx: 540, cy: 840, spread: 350, speedMin: 120, speedMax: 420, maxLife: 2400, gravity: 80, sizeMin: 6, sizeMax: 16, shape: "star" },
-    clash:       { count: 50, colors: ["#38bdf8", "#f43f5e", "#fbbf24", "#ffffff"], cx: 540, cy: 860, spread: 400, speedMin: 100, speedMax: 360, maxLife: 2200, gravity: 50, sizeMin: 5, sizeMax: 14, shape: "spark" },
-    fortune:     { count: 45, colors: ["#c084fc", "#a855f7", "#fbbf24", "#38bdf8", "#ffffff"], cx: 540, cy: 850, spread: 380, speedMin: 60, speedMax: 240, maxLife: 2600, gravity: -20, sizeMin: 5, sizeMax: 14, shape: "star" },
-    spotlight:   { count: 40, colors: ["#fbbf24", "#fef08a", "#ffffff", "#38bdf8"], cx: 540, cy: 750, spread: 450, speedMin: 40, speedMax: 180, maxLife: 2800, gravity: 20, sizeMin: 4, sizeMax: 10, shape: "star" },
-    freeze:      { count: 40, colors: ["#e0f2fe", "#bae6fd", "#7dd3fc", "#38bdf8", "#ffffff"], cx: 540, cy: 960, spread: 450, speedMin: 40, speedMax: 180, maxLife: 2600, gravity: 15, sizeMin: 5, sizeMax: 15, shape: "spark" },
-    galaxy:      { count: 45, colors: ["#a855f7", "#818cf8", "#38bdf8", "#fbbf24", "#ffffff"], cx: 540, cy: 960, spread: 350, speedMin: 80, speedMax: 260, maxLife: 3000, gravity: 0, sizeMin: 4, sizeMax: 12, shape: "star" },
-    tsunami:     { count: 45, colors: ["#0284c7", "#38bdf8", "#7dd3fc", "#ffffff", "#0369a1"], cx: 540, cy: 1200, spread: 600, speedMin: 120, speedMax: 360, maxLife: 2400, gravity: 110, sizeMin: 5, sizeMax: 16, shape: "drop" },
-    diamond:     { count: 40, colors: ["#ffffff", "#f0f9ff", "#e0f2fe", "#fbcfe8", "#fde047"], cx: 540, cy: 960, spread: 380, speedMin: 90, speedMax: 320, maxLife: 2800, gravity: 20, sizeMin: 5, sizeMax: 14, shape: "star" },
-    cheer:       { count: 35, colors: ["#10b981", "#34d399", "#6ee7b7", "#fbbf24", "#ffffff"], cx: 540, cy: 900, spread: 300, speedMin: 70, speedMax: 260, maxLife: 2200, gravity: 45, sizeMin: 5, sizeMax: 14, shape: "star" },
+    drop: { count: 40, colors: ["#fbbf24", "#f59e0b", "#38bdf8", "#f472b6", "#ffffff"], cx: 540, cy: 1340, spread: 400, speedMin: 90, speedMax: 300, maxLife: 2400, gravity: 85, sizeMin: 6, sizeMax: 16, shape: "star" },
+    rain: { count: 55, colors: ["#38bdf8", "#a5f3fc", "#7dd3fc", "#e0f2fe", "#f472b6"], cx: 540, cy: 100, spread: 500, speedMin: 60, speedMax: 220, maxLife: 2800, gravity: 90, sizeMin: 6, sizeMax: 14, shape: "drop" },
+    boom: { count: 65, colors: ["#ef4444", "#f97316", "#fbbf24", "#ffffff", "#fb923c"], cx: 540, cy: 900, spread: 60, speedMin: 180, speedMax: 500, maxLife: 1600, gravity: 120, sizeMin: 5, sizeMax: 16, shape: "spark" },
+    heart: { count: 36, colors: ["#f472b6", "#fb7185", "#fda4af", "#ff4d6d", "#fbbf24"], cx: 540, cy: 960, spread: 340, speedMin: 30, speedMax: 150, maxLife: 2400, gravity: -40, sizeMin: 10, sizeMax: 20, shape: "heart" },
+    like_magic: { count: 80, colors: ["#ff007f", "#ec4899", "#fbbf24", "#f43f5e", "#ffffff", "#a855f7"], cx: 540, cy: 960, spread: 450, speedMin: 120, speedMax: 420, maxLife: 3200, gravity: -40, sizeMin: 8, sizeMax: 22, shape: "heart" },
+    milestone: { count: 80, colors: ["#fbbf24", "#f472b6", "#38bdf8", "#4ade80", "#c084fc", "#ffffff"], cx: 540, cy: 750, spread: 400, speedMin: 100, speedMax: 400, maxLife: 3000, gravity: 95, sizeMin: 6, sizeMax: 18, shape: "star" },
+    vote: { count: 45, colors: ["#fbbf24", "#ffffff", "#38bdf8", "#f59e0b", "#fde68a", "#f472b6"], cx: 540, cy: 860, spread: 360, speedMin: 90, speedMax: 320, maxLife: 2200, gravity: 75, sizeMin: 6, sizeMax: 14, shape: "star" },
+    wheel: { count: 40, colors: ["#fbbf24", "#c084fc", "#38bdf8", "#4ade80", "#f472b6"], cx: 540, cy: 860, spread: 300, speedMin: 100, speedMax: 360, maxLife: 2400, gravity: 85, sizeMin: 6, sizeMax: 16, shape: "star" },
+    bomb: { count: 70, colors: ["#ef4444", "#fbbf24", "#fb923c", "#1e293b", "#ffffff"], cx: 540, cy: 900, spread: 40, speedMin: 250, speedMax: 620, maxLife: 1800, gravity: 150, sizeMin: 4, sizeMax: 14, shape: "spark" },
+    hype: { count: 45, colors: ["#ef4444", "#f97316", "#fbbf24", "#ec4899", "#ffffff"], cx: 540, cy: 820, spread: 380, speedMin: 80, speedMax: 300, maxLife: 2200, gravity: 60, sizeMin: 7, sizeMax: 18, shape: "star" },
+    confetti: { count: 90, colors: ["#fbbf24", "#38bdf8", "#f472b6", "#4ade80", "#c084fc", "#ef4444", "#fb923c"], cx: 540, cy: 0, spread: 680, speedMin: 60, speedMax: 280, maxLife: 3400, gravity: 120, sizeMin: 5, sizeMax: 15, shape: "rect" },
+    fireworks: { count: 60, colors: ["#fbbf24", "#38bdf8", "#f472b6", "#4ade80", "#ffffff"], cx: 540, cy: 500, spread: 500, speedMin: 120, speedMax: 420, maxLife: 2400, gravity: 70, sizeMin: 4, sizeMax: 12, shape: "spark" },
+    lightning: { count: 30, colors: ["#38bdf8", "#7dd3fc", "#bfdbfe", "#ffffff", "#fbbf24"], cx: 540, cy: 960, spread: 120, speedMin: 60, speedMax: 280, maxLife: 1200, gravity: 20, sizeMin: 4, sizeMax: 10, shape: "spark" },
+    laser: { count: 45, colors: ["#00f0ff", "#ff007f", "#39ff14", "#ffe600", "#ffffff"], cx: 540, cy: 960, spread: 400, speedMin: 120, speedMax: 350, maxLife: 2000, gravity: 30, sizeMin: 4, sizeMax: 10, shape: "spark" },
+    magic: { count: 65, colors: ["#fbbf24", "#fef08a", "#c084fc", "#e879f9", "#38bdf8", "#ffffff"], cx: 540, cy: 960, spread: 400, speedMin: 80, speedMax: 320, maxLife: 2600, gravity: -30, sizeMin: 5, sizeMax: 14, shape: "star" },
+    shield: { count: 40, colors: ["#00f0ff", "#38bdf8", "#a5f3fc", "#ffffff", "#0284c7"], cx: 540, cy: 960, spread: 450, speedMin: 50, speedMax: 200, maxLife: 2200, gravity: 20, sizeMin: 4, sizeMax: 10, shape: "spark" },
+    meteor: { count: 75, colors: ["#ff4500", "#ff8c00", "#ffd700", "#ffffff", "#dc2626"], cx: 540, cy: 960, spread: 250, speedMin: 180, speedMax: 550, maxLife: 2000, gravity: 120, sizeMin: 5, sizeMax: 16, shape: "spark" },
+    boost: { count: 50, colors: ["#38bdf8", "#00f0ff", "#fbbf24", "#f97316", "#ffffff"], cx: 540, cy: 960, spread: 300, speedMin: 150, speedMax: 420, maxLife: 1800, gravity: 40, sizeMin: 4, sizeMax: 12, shape: "spark" },
+    vortex: { count: 70, colors: ["#38bdf8", "#818cf8", "#c084fc", "#f472b6", "#ffffff"], cx: 540, cy: 960, spread: 320, speedMin: 120, speedMax: 380, maxLife: 2800, gravity: 0, sizeMin: 4, sizeMax: 12, shape: "star" },
+    dragon: { count: 80, colors: ["#ef4444", "#f97316", "#fbbf24", "#ffd700", "#7f1d1d"], cx: 540, cy: 1100, spread: 220, speedMin: 140, speedMax: 480, maxLife: 2600, gravity: -120, sizeMin: 6, sizeMax: 18, shape: "spark" },
+    matrix: { count: 60, colors: ["#22c55e", "#4ade80", "#86efac", "#00ffcc", "#ffffff"], cx: 540, cy: 80, spread: 800, speedMin: 150, speedMax: 400, maxLife: 3200, gravity: 140, sizeMin: 8, sizeMax: 16, shape: "rect" },
+    supernova: { count: 90, colors: ["#ffffff", "#fef08a", "#fbbf24", "#f472b6", "#38bdf8"], cx: 540, cy: 900, spread: 120, speedMin: 220, speedMax: 650, maxLife: 3000, gravity: 40, sizeMin: 5, sizeMax: 16, shape: "star" },
+    champion: { count: 70, colors: ["#fbbf24", "#f59e0b", "#fef08a", "#ffffff", "#ffd700"], cx: 540, cy: 850, spread: 380, speedMin: 80, speedMax: 320, maxLife: 3000, gravity: -35, sizeMin: 6, sizeMax: 16, shape: "star" },
+    aurora: { count: 65, colors: ["#10b981", "#06b6d4", "#8b5cf6", "#d946ef", "#ffffff"], cx: 540, cy: 480, spread: 500, speedMin: 40, speedMax: 160, maxLife: 3200, gravity: -15, sizeMin: 5, sizeMax: 14, shape: "star" },
+    phoenix: { count: 80, colors: ["#fbbf24", "#f97316", "#ef4444", "#ffd700", "#ffffff"], cx: 540, cy: 1100, spread: 260, speedMin: 120, speedMax: 450, maxLife: 2800, gravity: -90, sizeMin: 6, sizeMax: 18, shape: "spark" },
+    disco: { count: 70, colors: ["#00f0ff", "#ff007f", "#ffe600", "#39ff14", "#ffffff"], cx: 540, cy: 500, spread: 600, speedMin: 80, speedMax: 320, maxLife: 2600, gravity: 40, sizeMin: 4, sizeMax: 12, shape: "star" },
+    tornado: { count: 75, colors: ["#38bdf8", "#0284c7", "#fbbf24", "#ffffff"], cx: 540, cy: 800, spread: 240, speedMin: 150, speedMax: 480, maxLife: 2600, gravity: 0, sizeMin: 4, sizeMax: 12, shape: "spark" },
+    clap: { count: 40, colors: ["#fbbf24", "#ffd700", "#ffffff", "#f59e0b"], cx: 540, cy: 880, spread: 320, speedMin: 90, speedMax: 280, maxLife: 2000, gravity: 60, sizeMin: 6, sizeMax: 14, shape: "star" },
+    confess: { count: 40, colors: ["#fef08a", "#fbbf24", "#f472b6", "#c084fc", "#ffffff"], cx: 540, cy: 800, spread: 360, speedMin: 50, speedMax: 200, maxLife: 2400, gravity: -20, sizeMin: 4, sizeMax: 12, shape: "star" },
+    quiz: { count: 45, colors: ["#fbbf24", "#38bdf8", "#4ade80", "#ffffff"], cx: 540, cy: 750, spread: 350, speedMin: 70, speedMax: 260, maxLife: 2400, gravity: 50, sizeMin: 5, sizeMax: 14, shape: "star" },
+    combo: { count: 30, colors: ["#fbbf24", "#f472b6", "#38bdf8", "#ffffff"], cx: 540, cy: 900, spread: 180, speedMin: 60, speedMax: 240, maxLife: 1600, gravity: 75, sizeMin: 5, sizeMax: 12, shape: "star" },
+    gift: { count: 28, colors: ["#fbbf24", "#f472b6", "#4ade80", "#38bdf8", "#ffffff"], cx: 540, cy: 700, spread: 200, speedMin: 50, speedMax: 200, maxLife: 2000, gravity: 70, sizeMin: 6, sizeMax: 14, shape: "star" },
+    buzzer: { count: 60, colors: ["#fbbf24", "#ef4444", "#ffd700", "#f59e0b", "#ffffff"], cx: 540, cy: 840, spread: 350, speedMin: 120, speedMax: 420, maxLife: 2400, gravity: 80, sizeMin: 6, sizeMax: 16, shape: "star" },
+    clash: { count: 50, colors: ["#38bdf8", "#f43f5e", "#fbbf24", "#ffffff"], cx: 540, cy: 860, spread: 400, speedMin: 100, speedMax: 360, maxLife: 2200, gravity: 50, sizeMin: 5, sizeMax: 14, shape: "spark" },
+    fortune: { count: 45, colors: ["#c084fc", "#a855f7", "#fbbf24", "#38bdf8", "#ffffff"], cx: 540, cy: 850, spread: 380, speedMin: 60, speedMax: 240, maxLife: 2600, gravity: -20, sizeMin: 5, sizeMax: 14, shape: "star" },
+    spotlight: { count: 40, colors: ["#fbbf24", "#fef08a", "#ffffff", "#38bdf8"], cx: 540, cy: 750, spread: 450, speedMin: 40, speedMax: 180, maxLife: 2800, gravity: 20, sizeMin: 4, sizeMax: 10, shape: "star" },
+    freeze: { count: 40, colors: ["#e0f2fe", "#bae6fd", "#7dd3fc", "#38bdf8", "#ffffff"], cx: 540, cy: 960, spread: 450, speedMin: 40, speedMax: 180, maxLife: 2600, gravity: 15, sizeMin: 5, sizeMax: 15, shape: "spark" },
+    galaxy: { count: 45, colors: ["#a855f7", "#818cf8", "#38bdf8", "#fbbf24", "#ffffff"], cx: 540, cy: 960, spread: 350, speedMin: 80, speedMax: 260, maxLife: 3000, gravity: 0, sizeMin: 4, sizeMax: 12, shape: "star" },
+    tsunami: { count: 45, colors: ["#0284c7", "#38bdf8", "#7dd3fc", "#ffffff", "#0369a1"], cx: 540, cy: 1200, spread: 600, speedMin: 120, speedMax: 360, maxLife: 2400, gravity: 110, sizeMin: 5, sizeMax: 16, shape: "drop" },
+    diamond: { count: 40, colors: ["#ffffff", "#f0f9ff", "#e0f2fe", "#fbcfe8", "#fde047"], cx: 540, cy: 960, spread: 380, speedMin: 90, speedMax: 320, maxLife: 2800, gravity: 20, sizeMin: 5, sizeMax: 14, shape: "star" },
+    cheer: { count: 35, colors: ["#10b981", "#34d399", "#6ee7b7", "#fbbf24", "#ffffff"], cx: 540, cy: 900, spread: 300, speedMin: 70, speedMax: 260, maxLife: 2200, gravity: 45, sizeMin: 5, sizeMax: 14, shape: "star" },
   };
 
   const def = cfg[e.type] || { count: 20, colors: ["#fbbf24", "#38bdf8", "#f472b6", "#ffffff", "#f59e0b"], cx: 540, cy: 900, spread: 260, speedMin: 50, speedMax: 240, maxLife: 1600, gravity: 80, sizeMin: 6, sizeMax: 12, shape: "star" };
@@ -5705,7 +5729,7 @@ function drawInteractive(targetCtx, p, now) {
         targetCtx.moveTo(0, py(rib.yBase));
         for (let x = 0; x <= 1080; x += 30) {
           const wave = Math.sin(now * rib.speed + x * rib.freq) * rib.amp +
-                       Math.cos(now * rib.speed * 0.7 + x * 0.003) * (rib.amp * 0.4);
+            Math.cos(now * rib.speed * 0.7 + x * 0.003) * (rib.amp * 0.4);
           targetCtx.lineTo(px(x), py(rib.yBase + wave));
         }
         targetCtx.lineTo(px(1080), py(rib.yBase + 180));
@@ -7462,7 +7486,7 @@ function drawQuizOverlay(targetCtx, p, now) {
 }
 
 function resetCanvasState(c) {
-  try { c.setTransform(1, 0, 0, 1, 0, 0); } catch {}
+  try { c.setTransform(1, 0, 0, 1, 0, 0); } catch { }
   c.globalAlpha = 1;
   c.globalCompositeOperation = "source-over";
   c.shadowBlur = 0;
@@ -7486,7 +7510,7 @@ function drawMainFrame(now, targetCtx = ctx) {
   lastDraw = now;
 
   const s = interactiveState();
-  if (!s.screenTransition) tickScreens(now, config.screenIntervalMs);
+  if (isMainThread && !s.screenTransition) tickScreens(now, config.screenIntervalMs);
   updateFloatingReactions(now);
 
   const screen = s.screen;
@@ -7504,95 +7528,48 @@ function drawMainFrame(now, targetCtx = ctx) {
   // 3. Persistent hero (Eye, Bigg Boss 3D title, subtitle pill, call-to-action, navigation tabs)
   drawHero(targetCtx, p, now, screenLabel(screen), tr);
 
-  // 4. Content Area (Between tabs and bottom) with 10x-faster Snapshot Diagonal Cyber Wipe
+  // 4. Content Area (Between tabs and bottom) with Ultra-Fast Rectangular Cyber Scissor Wipe (<0.2ms)
   if (tr && tr.from !== tr.to) {
     const t = clamp(tr.t, 0, 1);
     const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     const dir = transitionDirection(tr.from, tr.to);
 
-    // One-time snapshot of outgoing screen when transition starts (saves 30ms CPU per frame!)
+    // One-time snapshot of outgoing screen content
     const transKey = `${tr.from}->${tr.to}@${tr.startedAt || tr.start || 0}`;
     if (capturedTransitionKey !== transKey) {
       oldCtx.clearRect(0, 0, W, H);
-      drawBackground(oldCtx, p, now);
       drawScreenContent(tr.from, oldCtx, p, now);
       capturedTransitionKey = transKey;
     }
 
-    // Render incoming screen directly to targetCtx (zero redundant intermediate buffer)
+    // Render incoming screen directly to targetCtx
     drawScreenContent(tr.to, targetCtx, p, now);
 
     const clipY = py(412);
     const clipH = py(1730) - clipY;
-    const angleOffset = ps(180);
     const wipeProgress = dir > 0 ? (1 - eased) : eased;
-    const wipeX = wipeProgress * (W + angleOffset * 2) - angleOffset;
+    const wipeW = Math.round(W * wipeProgress);
 
-    // Composite outgoing screen snapshot with angled diagonal cyber wipe
-    targetCtx.save();
-    targetCtx.beginPath();
-    targetCtx.rect(0, clipY, W, clipH);
-    targetCtx.clip();
+    // Blazing-fast hardware/software scissor box composite
+    if (wipeW > 0) {
+      targetCtx.save();
+      targetCtx.beginPath();
+      targetCtx.rect(0, clipY, wipeW, clipH);
+      targetCtx.clip();
+      targetCtx.drawImage(oldSceneCanvas, 0, 0);
+      targetCtx.restore();
 
-    targetCtx.save();
-    targetCtx.beginPath();
-    if (dir > 0) {
-      targetCtx.moveTo(0, clipY);
-      targetCtx.lineTo(wipeX + angleOffset, clipY);
-      targetCtx.lineTo(wipeX - angleOffset, clipY + clipH);
-      targetCtx.lineTo(0, clipY + clipH);
-    } else {
-      targetCtx.moveTo(W, clipY);
-      targetCtx.lineTo(wipeX + angleOffset, clipY);
-      targetCtx.lineTo(wipeX - angleOffset, clipY + clipH);
-      targetCtx.lineTo(W, clipY + clipH);
+      // Sharp cyber laser blade along wipe boundary
+      targetCtx.save();
+      targetCtx.strokeStyle = p.cyan;
+      targetCtx.lineWidth = ps(3.5);
+      targetCtx.globalAlpha = 0.85;
+      targetCtx.beginPath();
+      targetCtx.moveTo(wipeW, clipY);
+      targetCtx.lineTo(wipeW, clipY + clipH);
+      targetCtx.stroke();
+      targetCtx.restore();
     }
-    targetCtx.closePath();
-    targetCtx.clip();
-
-    const oldScale = 1.0 - (1 - wipeProgress) * 0.06;
-    targetCtx.globalAlpha = Math.max(0, Math.min(1, wipeProgress * 1.12));
-    targetCtx.translate(W / 2, clipY + clipH / 2);
-    targetCtx.scale(oldScale, oldScale);
-    targetCtx.translate(-W / 2, -(clipY + clipH / 2));
-    targetCtx.drawImage(oldSceneCanvas, 0, 0);
-    targetCtx.restore();
-
-    // Brilliant cyber neon laser blade along the diagonal boundary
-    const topX = wipeX + angleOffset;
-    const botX = wipeX - angleOffset;
-    const bladeAlpha = Math.sin(t * Math.PI);
-
-    // Cyan/Gold chromatic laser aura
-    targetCtx.save();
-    targetCtx.strokeStyle = p.cyan;
-    targetCtx.lineWidth = ps(10);
-    targetCtx.globalAlpha = 0.45 * bladeAlpha;
-    targetCtx.beginPath();
-    targetCtx.moveTo(topX, clipY);
-    targetCtx.lineTo(botX, clipY + clipH);
-    targetCtx.stroke();
-
-    // Core white laser beam
-    targetCtx.strokeStyle = "#ffffff";
-    targetCtx.lineWidth = ps(3);
-    targetCtx.globalAlpha = 0.95 * bladeAlpha;
-    targetCtx.beginPath();
-    targetCtx.moveTo(topX, clipY);
-    targetCtx.lineTo(botX, clipY + clipH);
-    targetCtx.stroke();
-    targetCtx.restore();
-
-    // Stardust diamond glints along traveling blade
-    for (let si = 0; si < 5; si++) {
-      const sp = (si + 0.5) / 5;
-      const bx = topX * (1 - sp) + botX * sp;
-      const by = clipY + clipH * sp;
-      const sparkColor = (si % 2 === 0) ? "#fbbf24" : "#ffffff";
-      drawMagicSparkle(targetCtx, bx / sx, by / sy, 5.5, now + si * 220, sparkColor);
-    }
-
-    targetCtx.restore();
   } else {
     capturedTransitionKey = "";
     drawScreenContent(screen, targetCtx, p, now);
@@ -7644,7 +7621,7 @@ export async function initRenderer() {
         const buf = await readFile(`assets/contestants/${no}.jpg`);
         const img = await loadImage(buf);
         contestantImages.set(no, img);
-      } catch {}
+      } catch { }
     }
   }
   warmAvatarCache();
@@ -7667,7 +7644,7 @@ export async function initRenderer() {
       } else {
         publishFrame(canvas.toBuffer("image/jpeg", config.jpegQuality));
       }
-    } catch {}
+    } catch { }
   }
 
 }
@@ -7686,7 +7663,7 @@ export async function startRenderer() {
   if (numWorkers > 1) {
     const W = config.renderWidth, H = config.renderHeight;
     const bufSize = W * H * 4;
-    const SLOTS_PER_WORKER = 4;
+    const SLOTS_PER_WORKER = 10;
     const workerBuffers = [];
 
     for (let i = 0; i < numWorkers; i++) {
@@ -7749,13 +7726,21 @@ export async function startRenderer() {
       return cachedInteractiveSnapshot;
     }
 
+    let stateVersion = 1;
+    let interactiveVersion = 1;
+    const workerStateVersions = new Array(numWorkers).fill(0);
+    const workerInteractiveVersions = new Array(numWorkers).fill(0);
+    const workerHadReactions = new Array(numWorkers).fill(false);
+
     const broadcastEvent = (event, payload) => {
+      stateVersion++;
+      interactiveVersion++;
       cachedStateSnapshot = null;
       cachedInteractiveSnapshot = null;
       lastStateSnapshotAt = 0;
       lastInteractiveSnapshotAt = 0;
       for (const w of activeWorkers) {
-        try { w.postMessage({ cmd: "event", event, payload }); } catch {}
+        try { w.postMessage({ cmd: "event", event, payload }); } catch { }
       }
     };
     workerUnsubs = [
@@ -7770,11 +7755,11 @@ export async function startRenderer() {
     ];
 
     const frameInterval = 1000 / config.renderFps;
-    const PIPELINE_DEPTH = Math.max(12, numWorkers * 3);
+    const PIPELINE_DEPTH = Math.max(28, numWorkers * 7);
     const frameQueue = new Map();
     const streamStartTime = Date.now();
     const workerInFlight = new Array(numWorkers).fill(0);
-    const MAX_IN_FLIGHT_PER_WORKER = 3;
+    const MAX_IN_FLIGHT_PER_WORKER = 7;
     const workerSlots = new Array(numWorkers).fill(0);
     const workerStats = Array.from({ length: numWorkers }, () => ({ frames: 0, totalMs: 0 }));
     let nextDispatchIndex = 0;
@@ -7790,33 +7775,65 @@ export async function startRenderer() {
       frameQueue.set(frameIndex, { workerId, slot, ready: false });
 
       const targetFrameTime = streamStartTime + Math.round(frameIndex * frameInterval);
+      if (isScreenAuto()) tickScreens(targetFrameTime, config.screenIntervalMs);
       updateFloatingReactions(targetFrameTime);
 
-      activeWorkers[workerId].postMessage({
+      const s = interactiveState();
+      const hasActiveInteractive = Boolean(
+        s.screenTransition ||
+        (s.particles && s.particles.length > 0) ||
+        (s.events && s.events.length > 0)
+      );
+      const hasActiveRankTransition = activeRankTransitions.size > 0;
+
+      // Lean sync: Only deep-clone state when data actually changed or during live animations
+      const stateNeedsSync = (workerStateVersions[workerId] !== stateVersion) ||
+        hasActiveRankTransition ||
+        (targetFrameTime - lastStateSnapshotAt >= 400);
+
+      const interactiveNeedsSync = (workerInteractiveVersions[workerId] !== interactiveVersion) ||
+        hasActiveInteractive ||
+        (targetFrameTime - lastInteractiveSnapshotAt >= 400);
+
+      const renderMsg = {
         cmd: "render",
         workerId,
         frameIndex,
         slot,
-        now: targetFrameTime,
-        state: getCachedStateSnapshot(targetFrameTime),
-        interactive: getCachedInteractiveSnapshot(targetFrameTime),
-        floatingReactions: floatingReactions.slice()
-      });
+        now: targetFrameTime
+      };
+
+      if (stateNeedsSync) {
+        renderMsg.state = getCachedStateSnapshot(targetFrameTime);
+        workerStateVersions[workerId] = stateVersion;
+      }
+      if (interactiveNeedsSync) {
+        renderMsg.interactive = getCachedInteractiveSnapshot(targetFrameTime);
+        workerInteractiveVersions[workerId] = interactiveVersion;
+      }
+      if (floatingReactions.length > 0 || workerHadReactions[workerId]) {
+        renderMsg.floatingReactions = floatingReactions.slice();
+        workerHadReactions[workerId] = (floatingReactions.length > 0);
+      }
+
+      activeWorkers[workerId].postMessage(renderMsg);
     }
 
     function dispatchNextIdleWorker() {
       while (running && (nextDispatchIndex - deliveryIndex) < PIPELINE_DEPTH) {
-        let dispatched = false;
-        for (let step = 0; step < numWorkers; step++) {
-          const w = (workerDispatchCursor + step) % numWorkers;
-          if (workerInFlight[w] < MAX_IN_FLIGHT_PER_WORKER) {
-            workerDispatchCursor = (w + 1) % numWorkers;
-            dispatchToWorker(w);
-            dispatched = true;
-            break;
+        // Find the least busy worker that has available capacity
+        let chosenWorker = -1;
+        let minFlight = MAX_IN_FLIGHT_PER_WORKER;
+        for (let i = 0; i < numWorkers; i++) {
+          const w = (workerDispatchCursor + i) % numWorkers;
+          if (workerInFlight[w] < minFlight) {
+            minFlight = workerInFlight[w];
+            chosenWorker = w;
           }
         }
-        if (!dispatched) break;
+        if (chosenWorker === -1) break; // All workers are at max capacity
+        workerDispatchCursor = (chosenWorker + 1) % numWorkers;
+        dispatchToWorker(chosenWorker);
       }
     }
 
@@ -7847,9 +7864,9 @@ export async function startRenderer() {
     dispatchNextIdleWorker();
 
     return await new Promise(async resolve => {
-      // 1. Warm-up prefill: buffer 8-12 frames ahead so heavy animations never starve the delivery loop
-      const prefillTarget = Math.max(8, Math.min(12, numWorkers * 3));
-      const prefillTimeout = performance.now() + 5000;
+      // 1. Warm-up prefill: buffer 16-24 frames ahead so heavy animations or GC pauses never starve delivery
+      const prefillTarget = Math.max(16, Math.min(24, numWorkers * 5));
+      const prefillTimeout = performance.now() + 8000;
       while (running && performance.now() < prefillTimeout) {
         let readyCount = 0;
         for (let f = 0; f < prefillTarget; f++) {
@@ -7863,38 +7880,32 @@ export async function startRenderer() {
       let fpsLastTime = performance.now();
       let lastPublishedJpeg = null;
       let lastPublishedRaw = isRaw ? canvas.data() : null;
-      let deliveryStart = performance.now();
 
       const deliveryLoop = async () => {
+        let nextDeliveryTime = performance.now() + frameInterval;
+
         while (running) {
           const now = performance.now();
-          const targetTime = deliveryStart + (deliveryIndex * frameInterval);
+          const waitMs = nextDeliveryTime - now;
 
-          // If main-thread I/O paused the event loop by more than 1 frame,
-          // realign deliveryStart so we maintain continuous 30fps pacing without cascade drops
-          if (now > targetTime + frameInterval) {
-            deliveryStart = now - (deliveryIndex * frameInterval);
-          }
-
-          // Wait until this frame's target wall-clock delivery time
-          const waitMs = (deliveryStart + deliveryIndex * frameInterval) - performance.now();
           if (waitMs > 16) {
             await new Promise(r => setTimeout(r, Math.floor(waitMs - 8)));
           }
-          while ((deliveryStart + deliveryIndex * frameInterval) > performance.now() && running) {
-            await new Promise(r => setImmediate(r));
+          while (nextDeliveryTime > performance.now() && running) {
+            await new Promise(r => setTimeout(r, 1));
           }
           if (!running) break;
 
-          // Check if worker finished this frame (up to 120ms grace window to absorb single-frame GC/draw spikes)
-          if (!frameQueue.get(deliveryIndex)?.ready) {
-            const graceEnd = performance.now() + 120;
+          // Adaptive 25ms grace window to absorb transient CPU spikes on low-end VPS
+          let item = frameQueue.get(deliveryIndex);
+          if (!item?.ready) {
+            const graceEnd = performance.now() + 25;
             while (!frameQueue.get(deliveryIndex)?.ready && performance.now() < graceEnd && running) {
-              await new Promise(r => setTimeout(r, 2));
+              await new Promise(r => setTimeout(r, 1));
             }
+            item = frameQueue.get(deliveryIndex);
           }
 
-          const item = frameQueue.get(deliveryIndex);
           if (item && item.ready) {
             fpsFrames++;
             if (isRaw) {
@@ -7908,21 +7919,48 @@ export async function startRenderer() {
             runtime.renderer.lastFrameAt = Date.now();
             runtime.renderer.lastDrawMs = Math.round(item.renderMs || 0);
             frameQueue.delete(deliveryIndex);
+            deliveryIndex++;
           } else {
-            // Only if frame was not ready after 45ms grace do we emit duplicate frame
-            if (runtime.encoder?.connectedHint) {
-              runtime.renderer.dropped++;
+            // Forward Recovery: If deliveryIndex is delayed, check if deliveryIndex + 1 is already finished on another worker core
+            const nextItem = frameQueue.get(deliveryIndex + 1);
+            if (nextItem && nextItem.ready) {
+              fpsFrames++;
+              if (isRaw) {
+                lastPublishedRaw = nextItem.rawBuf;
+                publishFrame(null, lastPublishedRaw);
+              } else {
+                lastPublishedJpeg = nextItem.jpegBuf;
+                publishFrame(nextItem.jpegBuf);
+              }
+              runtime.renderer.frames++;
+              runtime.renderer.lastFrameAt = Date.now();
+              runtime.renderer.lastDrawMs = Math.round(nextItem.renderMs || 0);
+              frameQueue.delete(deliveryIndex);
+              frameQueue.delete(deliveryIndex + 1);
+              deliveryIndex += 2; // Smoothly advance to current rendered time without dropping
+            } else {
+              // Frame not ready in time: emit last good frame to keep FFmpeg pipe rock solid without stutter
+              if (runtime.encoder?.connectedHint && runtime.renderer.frames > 30) {
+                runtime.renderer.dropped++;
+              }
+              fpsFrames++;
+              if (isRaw && lastPublishedRaw) {
+                publishFrame(null, lastPublishedRaw);
+              } else if (!isRaw && lastPublishedJpeg) {
+                publishFrame(lastPublishedJpeg);
+              }
+              frameQueue.delete(deliveryIndex);
+              deliveryIndex++;
             }
-            fpsFrames++;
-            if (isRaw && lastPublishedRaw) {
-              publishFrame(null, lastPublishedRaw);
-            } else if (!isRaw && lastPublishedJpeg) {
-              publishFrame(lastPublishedJpeg);
-            }
-            frameQueue.delete(deliveryIndex);
           }
-          deliveryIndex++;
           dispatchNextIdleWorker();
+
+          // Pacing protection: ensure nextDeliveryTime NEVER lags in the past to prevent drop cascade
+          const deliveredAt = performance.now();
+          if (deliveredAt > nextDeliveryTime) {
+            nextDeliveryTime = deliveredAt;
+          }
+          nextDeliveryTime += frameInterval;
 
           // FPS accounting & periodic logging with CPU core load distribution
           const nowFpsTime = performance.now();
@@ -7935,6 +7973,10 @@ export async function startRenderer() {
               const totalFramesDone = workerStats.reduce((sum, ws) => sum + ws.frames, 0) || 1;
               const coreLoadStr = workerStats.map((ws, idx) => `c${idx}:${((ws.frames / totalFramesDone) * 100).toFixed(0)}%`).join(" ");
               console.log(`[renderer] fps=${runtime.renderer.fps.toFixed(1)} draw=${runtime.renderer.lastDrawMs}ms frames=${runtime.renderer.frames} dropped=${runtime.renderer.dropped} | cores[${numWorkers}]: ${coreLoadStr}`);
+              if (!runtime.renderer._lastGcAt || (nowFpsTime - runtime.renderer._lastGcAt >= 60000)) {
+                runtime.renderer._lastGcAt = nowFpsTime;
+                try { if (globalThis.Bun?.gc) Bun.gc(true); } catch {}
+              }
             }
           }
         }
@@ -8024,14 +8066,14 @@ export async function startRenderer() {
 export async function stopRenderer() {
   running = false;
   for (const unsub of workerUnsubs) {
-    try { unsub(); } catch {}
+    try { unsub(); } catch { }
   }
   workerUnsubs = [];
   for (const w of activeWorkers) {
     try {
       w.postMessage({ cmd: "stop" });
       w.terminate();
-    } catch {}
+    } catch { }
   }
   activeWorkers = [];
   stopFrameServer();

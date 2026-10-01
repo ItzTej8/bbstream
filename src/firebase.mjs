@@ -53,6 +53,8 @@ function queueFlush() {
   flushTimer = setTimeout(flushBatchUpdates, 1000);
 }
 
+const lastSelfPushedVotes = new Map();
+
 async function flushBatchUpdates() {
   flushTimer = null;
   if (!rtdb) return;
@@ -74,6 +76,7 @@ async function flushBatchUpdates() {
       updates[`contestants/${no}/name`] = c?.displayName || c?.name || `Contestant ${no}`;
       updates[`contestants/${no}/votes`] = curVotes;
       updates[`contestants/${no}/updatedAt`] = Date.now();
+      lastSelfPushedVotes.set(Number(no), curVotes);
     }
     dirtyContestants.clear();
   }
@@ -214,6 +217,171 @@ export async function syncFullStateFirebase(stateObj) {
   } catch (e) {
     console.warn("[firebase] syncFullState error:", e.message);
   }
+}
+
+// Load full state snapshot directly from Firebase RTDB (Master Database)
+export async function loadStateFromFirebase(stateObj, knownVoterIds = null) {
+  const dbInstance = initFirebase();
+  if (!dbInstance) {
+    console.warn("[firebase] ⚠️ Cannot restore from Firebase: database uninitialized or credentials missing.");
+    return false;
+  }
+
+  try {
+    console.log("[firebase] ⏳ Restoring live state from Firebase Realtime Database...");
+
+    const [contestantsSnap, streamSnap, votersSnap, votesSnap, chatsSnap] = await Promise.all([
+      dbInstance.ref("contestants").once("value"),
+      dbInstance.ref("stream").once("value"),
+      dbInstance.ref("voters").once("value"),
+      dbInstance.ref("votes").limitToLast(20).once("value"),
+      dbInstance.ref("chats").limitToLast(20).once("value")
+    ]);
+
+    const contestantsVal = contestantsSnap.val();
+    const streamVal = streamSnap.val() || {};
+    const votersVal = votersSnap.val() || {};
+    const votesVal = votesSnap.val() || {};
+    const chatsVal = chatsSnap.val() || {};
+
+    // 1. Populate contestant vote counts
+    let totalVotesSum = 0;
+    for (const c of config.contestants) {
+      let v = 0;
+      if (contestantsVal) {
+        if (Array.isArray(contestantsVal)) {
+          v = Number(contestantsVal[c.no]?.votes || 0);
+        } else if (typeof contestantsVal === "object") {
+          v = Number(contestantsVal[c.no]?.votes || contestantsVal[String(c.no)]?.votes || 0);
+        }
+      }
+      totalVotesSum += v;
+      stateObj.contestants[c.no] = {
+        no: c.no,
+        name: c.name,
+        displayName: c.displayName,
+        imageUrl: c.imageUrl,
+        votes: v
+      };
+    }
+
+    // 2. Restore total votes & unique voters
+    stateObj.totalAcceptedVotes = Math.max(Number(streamVal.totalAcceptedVotes || 0), totalVotesSum);
+
+    const voterKeys = Object.keys(votersVal);
+    if (knownVoterIds && typeof knownVoterIds.add === "function") {
+      for (const id of voterKeys) {
+        knownVoterIds.add(id);
+      }
+      stateObj.uniqueVoters = Math.max(Number(streamVal.uniqueVoters || 0), knownVoterIds.size);
+    } else {
+      stateObj.uniqueVoters = Math.max(Number(streamVal.uniqueVoters || 0), voterKeys.length);
+    }
+
+    // 3. UI and stream status
+    stateObj.totalChatMessages = Number(streamVal.totalChatMessages || 0);
+    if (streamVal.theme === "light" || streamVal.theme === "dark") {
+      stateObj.theme = streamVal.theme;
+    }
+    if (typeof streamVal.votingOpen === "boolean") {
+      stateObj.votingOpen = streamVal.votingOpen;
+    }
+    if (streamVal.liveLikes) stateObj.liveLikes = Number(streamVal.liveLikes);
+    if (streamVal.liveViews) stateObj.liveViews = Number(streamVal.liveViews);
+
+    // 4. Restore recent votes
+    if (votesVal && typeof votesVal === "object") {
+      const voteEntries = Object.values(votesVal);
+      if (voteEntries.length > 0) {
+        stateObj.recentVotes = voteEntries.map(v => ({
+          contestant: Number(v.contestant),
+          name: String(v.name || "Viewer"),
+          at: Number(v.timestamp || Date.now()),
+          userId: String(v.userId || "viewer"),
+          count: Number(v.count || 1),
+          totalVotes: stateObj.contestants[v.contestant]?.votes || 0
+        }));
+        const last = stateObj.recentVotes[stateObj.recentVotes.length - 1];
+        if (last) {
+          stateObj.lastVote = last;
+          stateObj.lastVoteAt = last.at;
+        }
+      }
+    }
+
+    // 5. Restore recent chats
+    if (chatsVal && typeof chatsVal === "object") {
+      const chatEntries = Object.values(chatsVal);
+      if (chatEntries.length > 0) {
+        stateObj.recentChat = chatEntries.map(c => ({
+          name: String(c.name || "Viewer"),
+          text: String(c.text || ""),
+          at: Number(c.timestamp || Date.now())
+        }));
+      }
+    }
+
+    console.log(`[firebase] 🚀 State restored from Firebase cloud: votes=${stateObj.totalAcceptedVotes} uniqueVoters=${stateObj.uniqueVoters} theme=${stateObj.theme}`);
+    return true;
+  } catch (err) {
+    console.error(`[firebase] ❌ Error loading state from Firebase: ${err.message}`);
+    return false;
+  }
+}
+
+// Two-way cloud synchronization listener (console edits -> live stream)
+export function listenForCloudUpdates(stateObj, emitFn) {
+  if (!rtdb && !initFirebase()) return;
+
+  // Real-time theme listener
+  rtdb.ref("stream/theme").on("value", (snap) => {
+    if (!snap.exists()) return;
+    const t = snap.val();
+    if ((t === "light" || t === "dark") && stateObj.theme !== t) {
+      console.log(`[firebase] 🎨 Cloud theme sync received: ${t}`);
+      stateObj.theme = t;
+      if (typeof emitFn === "function") emitFn("theme", { theme: t });
+    }
+  });
+
+  // Real-time votingOpen listener
+  rtdb.ref("stream/votingOpen").on("value", (snap) => {
+    if (!snap.exists()) return;
+    const open = Boolean(snap.val());
+    if (stateObj.votingOpen !== open) {
+      console.log(`[firebase] 🗳️ Cloud votingOpen sync received: ${open ? "OPEN" : "CLOSED"}`);
+      stateObj.votingOpen = open;
+      if (typeof emitFn === "function") emitFn(open ? "voting-open" : "voting-closed", {});
+    }
+  });
+
+  // Real-time contestant votes listener (e.g. manual adjustments from Firebase console)
+  rtdb.ref("contestants").on("child_changed", (snap) => {
+    const val = snap.val();
+    if (!val || val.no === undefined || val.votes === undefined) return;
+    const no = Number(val.no);
+    const votes = Number(val.votes);
+    if (lastSelfPushedVotes.get(no) === votes) {
+      lastSelfPushedVotes.delete(no);
+      return;
+    }
+    if (stateObj.contestants[no] && stateObj.contestants[no].votes !== votes) {
+      const diff = votes - stateObj.contestants[no].votes;
+      stateObj.contestants[no].votes = votes;
+      stateObj.totalAcceptedVotes = Math.max(0, stateObj.totalAcceptedVotes + diff);
+      console.log(`[firebase] 🗳️ Cloud contestant update: #${no} (${val.name}) votes updated to ${votes} (diff: ${diff >= 0 ? "+" : ""}${diff})`);
+    }
+  });
+}
+
+export function setFirebaseTheme(theme) {
+  if (!rtdb && !initFirebase()) return;
+  rtdb.ref("stream/theme").set(theme).catch(() => {});
+}
+
+export function setFirebaseVotingOpen(open) {
+  if (!rtdb && !initFirebase()) return;
+  rtdb.ref("stream/votingOpen").set(Boolean(open)).catch(() => {});
 }
 
 // Attach event listeners and start periodic background syncing

@@ -143,7 +143,12 @@ function ensureWorker() {
 
   try {
     const workerPath = fileURLToPath(new URL("./tts-worker.mjs", import.meta.url));
-    const worker = new Worker(workerPath);
+    const worker = new Worker(workerPath, {
+      workerData: {
+        cacheInRam: config.ttsCacheInRam,
+        cacheTtlHours: config.ttsCacheTtlHours
+      }
+    });
 
     worker.on("message", (msg) => {
       if (msg.type === "tts_pcm") {
